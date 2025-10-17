@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KeyFiRoom - LSPU Status Viewer</title>
+
+    <!-- STYLING: Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- FRONT-END: React, Babel, and Firebase SDKs -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 🛑 CRITICAL FIX: Reverting to Stable Firebase v8 CDNs -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+
+    <!-- QR SCANNER (To be used in Week 2) -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- 1. CONFIGURATION & GLOBAL SETUP ---
+        const firebaseConfig = {
+        apiKey: "AIzaSyDFShCL1h1IZ2me-ek79XHqIpaFR2itBrg",
+        authDomain: "keyfiroom-lspu.firebaseapp.com",
+        databaseURL: "https://keyfiroom-lspu-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "keyfiroom-lspu",
+        storageBucket: "keyfiroom-lspu.firebasestorage.app",
+        messagingSenderId: "924604537949",
+        appId: "1:924604537949:web:210fe3056f9eb0882381b4",
+        //measurementId: "G-XEN24RE55T"
+        };
+
+        const app = firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        const auth = firebase.auth(); 
+
+        // FORCING INITIAL READ TO ENSURE BROWSER GETS DATA
+        database.ref('Keys').once('value', (snapshot) => {
+        // This line is a temporary check that forces the browser to pull data on load.
+        if (snapshot.exists()) {
+        console.log("Firebase Read Success!");
+        } else {
+        console.error("Firebase Read Error: The 'Keys' node is empty or missing.");
+        }
+        });
+        
+        const STATIC_KEY_LIST = [
+            { id: 'LAB_4_SERVERS', name: 'Lab 4 Server Key', location: 'CCS Building' },
+            { id: 'ROOM_305_LECTURE', name: 'Lecture Hall 305 Key', location: 'CCS Building' },
+            { id: 'FACULTY_OFFICE_B', name: 'Faculty Office B Key', location: 'Admin Annex' },
+            // Add other keys here up to 10...
+        ];
+        
+        const { useState, useEffect } = React;
+
+        // --- 2. JAVASCRIPT/REACT CODE WILL START HERE ---
+
+
+        // Function A: formatTime (Solves Readability)
+
+            const formatTime = (isoString) => {
+            // 1. If the input is empty (e.g., key is AVAILABLE), return N/A text.
+            if (!isoString) return 'N/A'; 
+            
+            // 2. Creates a JavaScript Date object from the messy string.
+            const date = new Date(isoString); 
+            
+            // 3. Converts the Date object into a readable time string.
+            return date.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                hour12: true // Forces it to display AM/PM format
+            });
+        };
+
+        // Function B: isKeyOverdue (Solves Accountability)
+
+            const isKeyOverdue = (expectedReturnTime) => {
+            // 1. If the key is not checked out, it cannot be overdue.
+            if (!expectedReturnTime) return false;
+    
+            // 2. Compares the key's DUE TIME (left) against the CURRENT TIME (right).
+            // If Due Time is EARLIER (less than) the current time, the key is overdue.
+            return new Date(expectedReturnTime) < new Date();
+        };
+
+        // Function C: calculateReturnTime (Solves Duration Hassle)
+
+            const calculateReturnTime = (durationHours) => {
+            // 1. Gets the current time right now.
+            const now = new Date();
+        
+            // 2. Adds the requested duration (1, 2, or 4 hours) to the current time.
+            now.setHours(now.getHours() + durationHours); 
+        
+            // 3. Returns the time in the standardized format required by Firebase.
+            return now.toISOString();
+        };
+
+        // Function D: signInAdmin (Solves Write Permission)
+
+            // --- WRITE HELPERS (For Week 2) ---
+            const signInAdmin = () => {
+                
+            // Required by Firebase security rules to perform the write action
+            return auth.signInAnonymously(); 
+        };
+
+        // Function E: writeKeyStatus (Solves Data Persistence)
+
+             const writeKeyStatus = (keyId, updates) => {
+             // This function sends the data to the correct path in the database
+             const keyRef = database.ref(`Keys/${keyId}`); 
+
+            return keyRef.set(updates); 
+        };
+
+// Function F: KeyStatusRow (The Visual Element)
+
+        // --- KEY DISPLAY ROW COMPONENT (Renders each individual key's status) ---
+
+            const KeyStatusRow = ({ keyData }) => {
+
+        // Determine the key's state based on data
+            const isOut = keyData.status === 'OUT';
+            const isOverdue = isKeyOverdue(keyData.expectedReturnTime); 
+
+        // Logic to select the correct Tailwind CSS class for the status badge
+
+            const statusColor = isOverdue 
+                        ? 'bg-yellow-500 text-red-900 border-2 border-red-700 animate-pulse shadow-xl' 
+                        : isOut 
+                        ? 'bg-red-600 text-white shadow-md' // Enhanced Red
+                        : 'bg-green-600 text-white shadow-md'; // Enhanced Green
+
+            const statusText = isOverdue ? '⚠️ OVERDUE' : keyData.status;
+
+        return (
+
+        // Main container for a single key entry: Increased shadow and rounded-2xl
+        
+            <div className="flex flex-col p-5 mb-3 border-none rounded-2xl shadow-xl bg-white transition hover:shadow-2xl">
+                
+                <div className="flex items-center justify-between">
+                    {/* Key Name: Deeper blue color */}
+                    <span className="text-2xl font-extrabold text-blue-900">{keyData.name}</span>
+                    {/* Status Badge */}
+                    <span className={`px-4 py-1 text-sm font-bold rounded-full ${statusColor}`}>
+                        {statusText}
+                    </span>
+                </div>
+            
+                <div className="mt-2 text-md text-gray-600">
+                    <p>Location: {keyData.location}</p>
+                    {/* Conditional rendering for OUT status */}
+                    {isOut && (
+                        <>
+                            {/* The core value: Due Back At time, made bolder */}
+                            <p className={`font-extrabold mt-1 ${isOverdue ? 'text-red-700' : 'text-red-600'}`}>
+                                DUE BACK: {formatTime(keyData.expectedReturnTime)}
+                            </p>
+                            <p className="text-sm">Checked Out By: ID {keyData.holderId || 'Unknown'}</p>
+                        </>
+                    )}
+                </div>
+
+            </div>
+
+            );
+        };
+        
+// Function G-1 : KeyManagementPanel (The Key Keeper Forms and Logic)
+
+        // --- KEY MANAGEMENT PANEL (Handles Checkout/Return Forms and Logic) ---
+        const KeyManagementPanel = ({ keys, selectedKeyId, setSelectedKeyId }) => {
+            // ... (rest of the component logic remains the same)
+            const keyData = keys[selectedKeyId];
+            const [borrowerId, setBorrowerId] = useState('');
+            const [duration, setDuration] = useState(2); // Default duration
+            const [isUpdating, setIsUpdating] = useState(false);
+
+            const isOut = keyData && keyData.status === 'OUT';
+            const expectedTime = keyData && keyData.expectedReturnTime ? formatTime(keyData.expectedReturnTime) : 'N/A';
+
+            const handleScan = (scannedText) => { /* ... (logic remains the same) */ };
+            const handleCheckout = async (e) => { /* ... (logic remains the same) */ };
+            const handleReturn = async () => { /* ... (logic remains the same) */ };
+
+
+            // --- RENDER THE CHECKOUT/RETURN FORM ---
+            return (
+                // Enhanced shadow and rounded corners for the main panel
+                <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6"> 
+                    <h3 className="text-3xl font-bold text-blue-800 border-b pb-3 mb-4">Key Management</h3>
+                    
+                    {/* QR Scanner Component: Better separation */}
+                    <div className="p-4 border border-blue-200 bg-blue-50 rounded-xl shadow-inner">
+                        <QrScanner onScanSuccess={handleScan} />
+                    </div>
+                    
+                    {/* Key Selector */}
+                    <label className="block space-y-2">
+                        <span className="text-lg text-gray-700 font-bold">Select Key to Manage:</span>
+                        <select 
+                            value={selectedKeyId} 
+                            onChange={(e) => setSelectedKeyId(e.target.value)}
+                            // Larger, more prominent select field
+                            className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white focus:ring-blue-500 focus:border-blue-500"
+                        >
+                            {Object.keys(keys).map(id => (
+                                <option key={id} value={id}>
+                                    {keys[id].name} - ({keys[id].status})
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+
+                    {/* Conditional Action Based on Key Status */}
+                    {keyData && isOut ? (
+                        // --- RETURN VIEW (If key is OUT) ---
+                        // Brighter red background for urgency
+                        <div className="p-5 bg-red-100 rounded-xl border-4 border-red-500 shadow-lg"> 
+                            <p className="text-xl font-bold text-red-800 mb-2">Key is currently OUT to ID {keyData.holderId}</p>
+                            <p className="text-md text-gray-700">Due: {expectedTime}</p>
+                            <button 
+                                onClick={handleReturn}
+                                // Prominent, green return button
+                                className="w-full bg-green-700 text-white p-4 rounded-xl font-bold mt-4 text-lg hover:bg-green-800 transition shadow-md"
+                                disabled={isUpdating}
+                            >
+                                {isUpdating ? 'Processing Return...' : 'Mark Key as RETURNED'}
+                            </button>
+                        </div>
+                    ) : (
+                        // --- CHECKOUT FORM VIEW (If key is AVAILABLE) ---
+                        // Brighter green background
+                        <form onSubmit={handleCheckout} className="p-5 bg-green-100 rounded-xl border-4 border-green-500 shadow-lg space-y-5">
+                            <h4 className="text-2xl font-extrabold text-green-800">Checkout Available Key</h4>
+                            
+                            {/* Borrower ID Input */}
+                            <label className="block space-y-2">
+                                <span className="text-lg text-gray-700 font-bold">Borrower ID (Scan or Type):</span>
+                                <input 
+                                    type="text" 
+                                    value={borrowerId} 
+                                    onChange={(e) => setBorrowerId(e.target.value.toUpperCase().replace(/\s/g, ''))}
+                                    placeholder="Enter Student/Faculty ID"
+                                    // Larger, more prominent input field
+                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg" 
+                                    required
+                                    minLength={4}
+                                />
+                            </label>
+
+                            {/* Duration Input */}
+                            <label className="block space-y-2">
+                                <span className="text-lg text-gray-700 font-bold">Duration (Hours):</span>
+                                <select 
+                                    value={duration} 
+                                    onChange={(e) => setDuration(parseInt(e.target.value))}
+                                    // Larger, more prominent select field
+                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white"
+                                >
+                                    <option value={1}>1 Hour</option>
+                                    <option value={2}>2 Hours</option>
+                                    <option value={4}>4 Hours</option>
+                                    <option value={8}>8 Hours (Full Day)</option>
+                                </select>
+                            </label>
+                            
+                            <button 
+                                type="submit" 
+                                // Prominent, blue checkout button
+                                className="w-full bg-blue-700 text-white p-4 rounded-xl font-bold text-lg hover:bg-blue-800 transition shadow-md"
+                                disabled={isUpdating}
+                            >
+                                {isUpdating ? 'Processing...' : 'CHECKOUT Key'}
+                            </button>
+                        </form>
+                    )}
+                </div>
+            );
+        };
+
+
+        // Function I: QrScanner (Handles Camera Input)
+
+        // --- QR SCANNER COMPONENT (Wrapper for the html5-qrcode library) ---
+        const QrScanner = ({ onScanSuccess }) => {
+            const qrCodeRegionId = 'reader-area';
+            
+            useEffect(() => {
+                // Creates a new scanner instance
+                const html5QrCode = new Html5Qrcode(qrCodeRegionId);
+                
+                // Configuration for the scanner
+                const config = { 
+                    fps: 10, 
+                    qrbox: { width: 250, height: 250 } 
+                };
+
+                // The callback function when a QR code is successfully read
+                const onScan = (decodedText, decodedResult) => {
+                    // Stop scanning immediately after a successful read
+                    html5QrCode.stop().then(() => {
+                        console.log("QR Code scanned successfully:", decodedText);
+                        // Send the scanned data back up to the parent component
+                        onScanSuccess(decodedText); 
+                    }).catch(err => {
+                        console.error("Error stopping the scanner:", err);
+                    });
+                };
+
+                // Request camera permission and start scanning
+                html5QrCode.start(
+                    { facingMode: "environment" }, // Prefer the back camera on mobile
+                    config, 
+                    onScan, 
+                    (errorMessage) => { 
+                        // Note: You can optionally display the error message to the user 
+                        // console.warn(`QR Code scanning error: ${errorMessage}`); 
+                    }
+                ).catch(err => {
+                    console.error("Error starting camera:", err);
+                    // This often happens if no camera is available or permission is denied
+                });
+
+                // Cleanup function: This runs when the component is unmounted (e.g., when the AdminPortal is closed)
+                return () => {
+                    if (html5QrCode.isscanning) {
+                        html5QrCode.stop().catch(err => {
+                            console.error("Error stopping scanner on unmount:", err);
+                        });
+                    }
+                };
+            }, []); // Empty dependency array ensures this runs once
+
+            // The component only needs a single div element to host the camera feed
+            return (
+                <div className="p-4 bg-gray-100 rounded-lg">
+                    <h4 className="text-lg font-bold text-gray-800 mb-2">Scan QR Code</h4>
+                    <div id={qrCodeRegionId} className="w-full h-64 border-2 border-dashed border-gray-300 rounded-lg overflow-hidden">
+                        {/* Camera view will render here */}
+                    </div>
+                    <p className="text-sm text-gray-500 mt-2 text-center">
+                        Point the camera at the Key or Borrower ID QR code.
+                    </p>
+                </div>
+            );
+        };
+
+        // Function G-2 : AdminPortal Placeholder
+
+        // --- ADMIN PORTAL COMPONENT (Replaces Placeholder) ---
+        const AdminPortal = ({ keys }) => {
+            // State to manage input and authentication status
+            const [passcode, setPasscode] = useState('');
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [isSigningIn, setIsSigningIn] = useState(false);
+            // Sets the default key ID to manage
+            const [selectedKeyId, setSelectedKeyId] = useState(Object.keys(keys)[0] || '');
+
+            // Logic to attempt sign-in and password check
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                // Prototype Password Check: Simple security gate
+                if (passcode !== 'CCS2025') { 
+                    alert('Invalid Passcode. Use CCS2025');
+                    return;
+                }
+                setIsSigningIn(true);
+                try {
+                    // Signs the user into Firebase anonymously to grant write permission
+                    await signInAdmin(); 
+                    setIsAuthenticated(true); 
+                } catch (error) {
+                    alert('Authentication Failed: ' + error.message);
+                } finally {
+                    setIsSigningIn(false);
+                }
+            };
+
+            if (!isAuthenticated) {
+                // --- LOGIN SCREEN RENDER ---
+                return (
+                    <div className="max-w-xs mx-auto p-6 mt-10 bg-white shadow-xl rounded-xl">
+                        <h2 className="text-xl font-bold text-blue-700 mb-4 text-center">Key Keeper Login</h2>
+                        <form onSubmit={handleLogin} className="space-y-4">
+                            <input
+                                type="password"
+                                value={passcode}
+                                onChange={(e) => setPasscode(e.target.value.toUpperCase())}
+                                placeholder="Enter Passcode (CCS2025)"
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500"
+                                disabled={isSigningIn}
+                            />
+                            <button
+                                type="submit"
+                                className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition"
+                                disabled={isSigningIn}
+                            >
+                                {isSigningIn ? 'Signing In...' : 'Access Portal'}
+                            </button>
+                        </form>
+                    </div>
+                );
+            }
+
+            // If authenticated, render the Key Management Panel (Next Step)
+            return <KeyManagementPanel keys={keys} selectedKeyId={selectedKeyId} setSelectedKeyId={setSelectedKeyId} />;
+        };
+
+
+
+        // Function H: The Main App Component
+
+        // --- MAIN APP COMPONENT (Handles data connection and switching views) ---
+
+            const App = () => {
+                // ... (state and useEffect logic remains the same)
+
+                // State to hold the live key data, loading status, and current view
+                const [keys, setKeys] = useState({});
+                const [loading, setLoading] = useState(true);
+                const [viewMode, setViewMode] = useState('public'); 
+
+                 // --- READ LOGIC (The Critical Firebase Connection) ---
+                useEffect(() => {
+                    const keysRef = database.ref('Keys'); 
+            
+                    // Sets up the listener to receive real-time updates from the database
+                    keysRef.on('value', (snapshot) => {
+                        const liveData = snapshot.val() || {};
+                        
+                        // Map the static list of keys with the live status data from Firebase
+                        const finalKeys = STATIC_KEY_LIST.map(staticKey => {
+                        const liveEntry = liveData[staticKey.id] || {};
+                        
+                            return {
+                                ...staticKey,
+                                status: liveEntry.status || 'AVAILABLE',
+                                ...liveEntry // Merges holderId and expectedReturnTime
+                            };
+                        });
+                    
+                        const keyMap = finalKeys.reduce((acc, key) => {
+                            acc[key.id] = key;
+                        return acc;
+                        }, {});
+
+                        setKeys(keyMap);
+                        setLoading(false);
+                    });
+
+                // Cleanup function to stop listening when the app closes
+                return () => keysRef.off();
+            }, []); // Empty array makes this run only once on load
+            
+                // --- FINAL RENDER ---
+
+
+                // Show a loading message while waiting for data
+                if (loading) return <div className="text-center p-8 text-lg text-gray-500">Loading Key Status...</div>;
+                
+                // Convert keys object to array and sort alphabetically for a clean list display
+                const keyArray = Object.values(keys).sort((a, b) => a.name.localeCompare(b.name));
+
+                return (
+                        // NEW: bg-gray-50 for a clean, light background
+                        <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans antialiased"> 
+                            <div className="max-w-xl lg:max-w-2xl mx-auto space-y-6"> 
+                                
+                                {/* HEADER: Removed sticky classes, increased py-8 for mobile spacing */}
+                                <header className="py-8 bg-white shadow-lg rounded-b-xl">
+                                    <h1 className="text-4xl font-extrabold text-blue-900 text-center">
+                                        KeyFiRoom - LSPU 🔑
+                                    </h1>
+                                    <p className="text-center text-md text-gray-500 mt-1">
+                                        Check key availability before heading to the office.
+                                    </p>
+                                </header>
+                                
+                                {/* View Switcher Buttons */}
+                                <div className="flex justify-center space-x-2 p-1 bg-white rounded-xl shadow-inner">
+                                    <button 
+                                        onClick={() => setViewMode('public')}
+                                        className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'public' ? 'bg-blue-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-blue-50'}`}
+                                    >
+                                        Public Status
+                                    </button>
+                                    <button 
+                                        onClick={() => setViewMode('admin')}
+                                        className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'admin' ? 'bg-blue-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-blue-50'}`}
+                                    >
+                                        Admin Action
+                                    </button>
+                                </div>
+
+                                {/* Conditional Rendering of the main content */}
+                                {viewMode === 'public' && (
+                                    <div className="space-y-4 pt-2">
+                                        <h2 className="text-2xl font-extrabold text-gray-800 px-2">Live Status Feed</h2>
+                                        
+                                        {keyArray.map(key => (
+                                            <KeyStatusRow key={key.id} keyData={key} />
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {viewMode === 'admin' && (
+                                    <AdminPortal keys={keys} />
+                                )}
+
+
+                                <footer className="text-center text-xs text-gray-400 pt-8 pb-4">
+                                    Developed by CCS Students. Data updates instantly.
+                                </footer>
+                            </div>
+                        </div>
+                    );
+            };
+
+        // --- START THE APP ---
+        
+        // --- 3. THE RENDER CALL WILL BE AT THE VERY BOTTOM ---
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+        
+    </script>
+</body>
+</html>
