@@ -157,6 +157,27 @@
             return output.trim();
         };
 
+
+        // Function I-1: writeNewKey (Handles creation of a brand new key entry)
+
+        const writeNewKey = (keyId, name, location) => {
+            // Data to be written for the new key's status
+            const statusUpdates = {
+                status: 'AVAILABLE',
+                holderId: null,
+                checkoutTime: null,
+                expectedReturnTime: null,
+                // Include static data directly in the key's object
+                name: name,
+                location: location
+            };
+
+            // This overwrites/creates the key at the specified path
+            const keyRef = database.ref(`Keys/${keyId}`); 
+
+            return keyRef.set(statusUpdates); 
+        };
+
         // Function F: KeyStatusRow (The Visual Element - Updated for Countdown)
         const KeyStatusRow = ({ keyData }) => {
 
@@ -248,14 +269,25 @@
                     await signInAdmin(); 
                     const expectedReturnTime = calculateReturnTime(duration);
                     
+                    // 1. Update the Key Status (Overwrites the key status)
                     const updates = {
                         status: 'OUT',
                         holderId: borrowerId,
                         checkoutTime: new Date().toISOString(),
                         expectedReturnTime: expectedReturnTime,
                     };
-                    
                     await writeKeyStatus(selectedKeyId, updates);
+
+                    // 2. CRITICAL NEW: Create Permanent Log Entry
+                    await database.ref('Logs').push({
+                        action: 'CHECKOUT',
+                        keyId: selectedKeyId,
+                        borrowerId: borrowerId,
+                        duration: duration,
+                        timestamp: new Date().toISOString(),
+                        expectedReturnTime: expectedReturnTime,
+                    });
+
                     alert(`Key ${keyData.name} checked out to ID ${borrowerId} until ${formatTime(expectedReturnTime)}.`);
                     setBorrowerId('');
 
@@ -274,14 +306,27 @@
                 setIsUpdating(true);
                 try {
                     await signInAdmin(); 
+
+
+
+                    // 1. Update the Key Status
                     const updates = {
                         status: 'AVAILABLE',
                         holderId: null,
                         checkoutTime: null,
                         expectedReturnTime: null,
                     };
-
                     await writeKeyStatus(selectedKeyId, updates);
+
+
+                    // 2. CRITICAL NEW: Create Permanent Log Entry for Return
+                    await database.ref('Logs').push({
+                        action: 'RETURN',
+                        keyId: selectedKeyId,
+                        borrowerId: keyData.holderId, // Use the ID from the current keyData
+                        timestamp: new Date().toISOString(),
+                    });
+
                     alert(`Key ${keyData.name} marked as AVAILABLE.`);
                     setBorrowerId('');
 
@@ -447,6 +492,155 @@
             );
         };
 
+        // Function I-2: KeyCreator (Handles Admin form for adding new keys)
+
+        const KeyCreator = () => {
+            const [newKeyId, setNewKeyId] = useState('');
+            const [newKeyName, setNewKeyName] = useState('');
+            const [newKeyLocation, setNewKeyLocation] = useState('');
+            const [isCreating, setIsCreating] = useState(false);
+
+            const handleCreate = async (e) => {
+                e.preventDefault();
+                if (!newKeyId || !newKeyName || !newKeyLocation) {
+                    alert("All fields are required to create a new key.");
+                    return;
+                }
+
+                setIsCreating(true);
+                try {
+                    // Ensure admin is signed in before write (safety check)
+                    await signInAdmin(); 
+                    
+                    // Write the new key data using the helper function
+                    await writeNewKey(
+                        newKeyId.toUpperCase().replace(/\s/g, '_'), // Standardize the ID format
+                        newKeyName, 
+                        newKeyLocation
+                    );
+
+                    alert(`New Key '${newKeyName}' created successfully!`);
+                    
+                    // Clear the form
+                    setNewKeyId('');
+                    setNewKeyName('');
+                    setNewKeyLocation('');
+
+                } catch (error) {
+                    console.error("Key creation failed:", error);
+                    alert('Key Creation Failed: ' + error.message);
+                } finally {
+                    setIsCreating(false);
+                }
+            };
+
+            return (
+                <div className="p-5 bg-teal-100 rounded-xl border-4 border-teal-500 shadow-lg space-y-4">
+                    <h4 className="text-2xl font-extrabold text-teal-800 border-b pb-2">Add New Key to System</h4>
+                    <form onSubmit={handleCreate} className="space-y-4">
+                        <input
+                            type="text"
+                            value={newKeyId}
+                            onChange={(e) => setNewKeyId(e.target.value)}
+                            placeholder="Enter Unique Key ID (e.g., LAB_3_KEY)"
+                            className="w-full p-3 border-2 border-gray-300 rounded-lg text-md focus:ring-teal-500 focus:border-teal-500"
+                            required
+                        />
+                        <input
+                            type="text"
+                            value={newKeyName}
+                            onChange={(e) => setNewKeyName(e.target.value)}
+                            placeholder="Key Name (e.g., Classroom 302 Key)"
+                            className="w-full p-3 border-2 border-gray-300 rounded-lg text-md focus:ring-teal-500 focus:border-teal-500"
+                            required
+                        />
+                        <input
+                            type="text"
+                            value={newKeyLocation}
+                            onChange={(e) => setNewKeyLocation(e.target.value)}
+                            placeholder="Location (e.g., CCS Building)"
+                            className="w-full p-3 border-2 border-gray-300 rounded-lg text-md focus:ring-teal-500 focus:border-teal-500"
+                            required
+                        />
+                        <button
+                            type="submit"
+                            className="w-full bg-blue-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-blue-700 transition shadow-md"
+                            disabled={isCreating}
+                        >
+                            {isCreating ? 'Creating...' : 'Add Key'}
+                        </button>
+                    </form>
+                </div>
+            );
+        };
+
+        // Function I-3: TransactionHistory (Reads and displays the transaction log)
+
+        const TransactionHistory = () => {
+            const [logs, setLogs] = useState([]);
+            const [loadingLogs, setLoadingLogs] = useState(true);
+
+            useEffect(() => {
+                const logsRef = database.ref('Logs');
+                
+                // Order logs by the timestamp and limit to the last 20 entries
+                // 'child_added' is efficient for building an ordered list
+                logsRef.limitToLast(20).on('value', (snapshot) => {
+                    const logsArray = [];
+                    snapshot.forEach(childSnapshot => {
+                        // Push the log data along with its Firebase unique ID
+                        logsArray.push({
+                            id: childSnapshot.key,
+                            ...childSnapshot.val()
+                        });
+                    });
+
+                    // Reverse the array so the newest log is at the top
+                    setLogs(logsArray.reverse());
+                    setLoadingLogs(false);
+                });
+
+                // Cleanup listener
+                return () => logsRef.off();
+            }, []);
+
+            if (loadingLogs) {
+                return <p className="text-center text-gray-500">Loading Transaction History...</p>;
+            }
+
+            if (logs.length === 0) {
+                return <p className="text-center text-gray-500">No transactions recorded yet.</p>;
+            }
+
+            return (
+                <div className="p-5 bg-white shadow-2xl rounded-2xl space-y-4">
+                    <h3 className="text-2xl font-bold text-teal-800 border-b pb-2">Recent Transaction Log (Last 20)</h3>
+                    
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {logs.map((log) => (
+                            <div key={log.id} className={`p-3 rounded-lg border-l-4 ${log.action === 'CHECKOUT' ? 'bg-red-50 border-red-500' : 'bg-green-50 border-green-500'}`}>
+                                <p className="text-sm font-bold text-gray-800 flex justify-between">
+                                    <span>
+                                        <span className={`px-2 py-0.5 rounded-full text-xs font-extrabold ${log.action === 'CHECKOUT' ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
+                                            {log.action}
+                                        </span>
+                                        <span className="ml-2 font-extrabold text-teal-800">{log.keyId}</span>
+                                    </span>
+                                    <span className="text-xs text-gray-500">
+                                        {new Date(log.timestamp).toLocaleDateString()} {formatTime(log.timestamp)}
+                                    </span>
+                                </p>
+                                <p className="text-xs mt-1 text-gray-600">
+                                    Borrower ID: {log.borrowerId || 'N/A'} 
+                                    {log.duration && ` | Duration: ${log.duration} hrs`}
+                                </p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
         // Function G-2 : AdminPortal (Updated for Thematic Separation)
 
         // --- ADMIN PORTAL COMPONENT (Handles Login Gate) ---
@@ -507,7 +701,20 @@
             }
 
             // If authenticated, render the Key Management Panel
-            return <KeyManagementPanel keys={keys} selectedKeyId={selectedKeyId} setSelectedKeyId={setSelectedKeyId} />;
+            return (
+                <div className="space-y-6">
+
+                    {/* NEW: Key Creation Component */}
+                    <KeyCreator /> 
+
+                    {/* Checkout/Return Forms */}
+                    <KeyManagementPanel keys={keys} selectedKeyId={selectedKeyId} setSelectedKeyId={setSelectedKeyId} />
+                    
+                    {/* NEW: Transaction History Viewer */}
+                    <TransactionHistory />
+                    
+                </div>
+            );
         };
 
 
@@ -557,8 +764,26 @@
             }, []);
             
             if (loading) return <div className="text-center p-8 text-lg text-gray-500">Loading Key Status...</div>;
+
+
+            // 1. Data Processing and Sorting (Must be BEFORE the loading check)
+            // This is the line that was likely misplaced or missing.
             const keyArray = Object.values(keys).sort((a, b) => a.name.localeCompare(b.name));
 
+            // 2. Show a loading message while waiting for data
+            if (loading) return (
+                <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-8">
+                    <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent border-solid rounded-full animate-spin"></div>
+                    <p className="mt-4 text-lg font-semibold text-teal-700">
+                        Establishing Realtime Connection...
+                    </p>
+                    <p className="mt-1 text-sm text-gray-500">
+                        Fetching latest key status from the server.
+                    </p>
+                </div>
+            );
+
+            // 3. FINAL RENDER (keyArray is now guaranteed to exist here)
             return (
                     <div className="min-h-screen bg-gray-100 p-2 sm:p-4 font-sans antialiased"> 
                         <div className="max-w-xl lg:max-w-2xl mx-auto space-y-6"> 
