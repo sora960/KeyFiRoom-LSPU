@@ -124,17 +124,52 @@
             return keyRef.set(updates); 
         };
 
-        // Function F: KeyStatusRow (The Visual Element - Updated for Theme)
+
+
+        // Function I: calculateTimeLeft (Solves User Confusion / Creates Urgency)
+
+        const calculateTimeLeft = (expectedReturnTime) => {
+            if (!expectedReturnTime) return null; // Key is available
+
+            const now = new Date();
+            const dueTime = new Date(expectedReturnTime);
+            const diffMs = dueTime - now; // Difference in milliseconds
+
+            if (diffMs <= 0) {
+                // If the difference is zero or negative, return null so the row handles the OVERDUE state
+                return null;
+            }
+
+            // Calculate hours and minutes
+            const diffMins = Math.floor(diffMs / 60000); // Total minutes left
+            const hours = Math.floor(diffMins / 60);
+            const minutes = diffMins % 60;
+
+            let output = '';
+            if (hours > 0) {
+                output += `${hours} hr${hours > 1 ? 's' : ''}`;
+            }
+            if (minutes > 0 || hours === 0) {
+                if (output.length > 0) output += ' ';
+                output += `${minutes} min${minutes > 1 ? 's' : ''}`;
+            }
+            
+            return output.trim();
+        };
+
+        // Function F: KeyStatusRow (The Visual Element - Updated for Countdown)
         const KeyStatusRow = ({ keyData }) => {
 
             const isOut = keyData.status === 'OUT';
             const isOverdue = isKeyOverdue(keyData.expectedReturnTime); 
+            // NEW: Calculate time left
+            const timeLeft = calculateTimeLeft(keyData.expectedReturnTime);
 
             const statusColor = isOverdue 
                         ? 'bg-yellow-500 text-red-900 border-2 border-red-700 animate-pulse shadow-xl' 
                         : isOut 
-                        ? 'bg-red-700 text-white shadow-md' // Enhanced Red
-                        : 'bg-emerald-600 text-white shadow-md'; // New: Emerald Green
+                        ? 'bg-red-700 text-white shadow-md'
+                        : 'bg-emerald-600 text-white shadow-md';
 
             const statusText = isOverdue ? '⚠️ OVERDUE' : keyData.status;
 
@@ -142,9 +177,7 @@
                 <div className="flex flex-col p-5 mb-3 border-none rounded-2xl shadow-xl bg-white transition hover:shadow-2xl">
                     
                     <div className="flex items-center justify-between">
-                        {/* Key Name: Updated to TEAL-800 */}
                         <span className="text-2xl font-extrabold text-teal-800">{keyData.name}</span>
-                        {/* Status Badge */}
                         <span className={`px-4 py-1 text-sm font-bold rounded-full ${statusColor}`}>
                             {statusText}
                         </span>
@@ -154,8 +187,14 @@
                         <p>Location: {keyData.location}</p>
                         {isOut && (
                             <>
+                                {/* CHANGE: Conditional Display for Countdown vs. Due Time */}
                                 <p className={`font-extrabold mt-1 ${isOverdue ? 'text-red-700' : 'text-red-600'}`}>
-                                    DUE BACK: {formatTime(keyData.expectedReturnTime)}
+                                    {isOverdue 
+                                        ? 'OVERDUE SINCE: ' + formatTime(keyData.expectedReturnTime)
+                                        : timeLeft
+                                            ? 'AVAILABLE IN: ' + timeLeft // Display Countdown
+                                            : 'DUE BACK: ' + formatTime(keyData.expectedReturnTime) // Fallback or Edge Case
+                                    }
                                 </p>
                                 <p className="text-sm">Checked Out By: ID {keyData.holderId || 'Unknown'}</p>
                             </>
@@ -192,7 +231,7 @@
                 }
             };
 
-            // --- CHECKOUT LOGIC (Digital Logbook Entry - remains the same, assuming sign-in is handled) ---
+            // --- CHECKOUT LOGIC (Digital Logbook Entry) ---
             const handleCheckout = async (e) => {
                 e.preventDefault();
                 if (!borrowerId || duration < 1) {
@@ -206,9 +245,7 @@
 
                 setIsUpdating(true);
                 try {
-                    // Added a check to ensure authentication is still active for the write
                     await signInAdmin(); 
-                    
                     const expectedReturnTime = calculateReturnTime(duration);
                     
                     const updates = {
@@ -219,7 +256,6 @@
                     };
                     
                     await writeKeyStatus(selectedKeyId, updates);
-                    
                     alert(`Key ${keyData.name} checked out to ID ${borrowerId} until ${formatTime(expectedReturnTime)}.`);
                     setBorrowerId('');
 
@@ -233,14 +269,11 @@
 
             // --- RETURN LOGIC (Resets status to AVAILABLE) ---
             const handleReturn = async () => {
-                // Confirmation dialog 
                 if (!confirm(`Are you sure you want to mark ${keyData.name} as returned?`)) return;
 
                 setIsUpdating(true);
                 try {
-                    // CRITICAL FIX: Re-authenticate before write to ensure permission (The likely bug fix)
                     await signInAdmin(); 
-
                     const updates = {
                         status: 'AVAILABLE',
                         holderId: null,
@@ -263,21 +296,17 @@
             // --- RENDER THE CHECKOUT/RETURN FORM ---
             return (
                 <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6"> 
-                    {/* Header: Updated to TEAL-800 theme */}
                     <h3 className="text-3xl font-bold text-teal-800 border-b pb-3 mb-4">Key Management</h3>
                     
-                    {/* QR Scanner Component: Updated to TEAL theme */}
                     <div className="p-4 border border-teal-200 bg-teal-50 rounded-xl shadow-inner">
                         <QrScanner onScanSuccess={handleScan} />
                     </div>
                     
-                    {/* Key Selector */}
                     <label className="block space-y-2">
                         <span className="text-lg text-gray-700 font-bold">Select Key to Manage:</span>
                         <select 
                             value={selectedKeyId} 
                             onChange={(e) => setSelectedKeyId(e.target.value)}
-                            // Input focus border updated to TEAL-500
                             className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white focus:ring-teal-500 focus:border-teal-500"
                         >
                             {Object.keys(keys).map(id => (
@@ -288,7 +317,6 @@
                         </select>
                     </label>
 
-                    {/* Conditional Action Based on Key Status */}
                     {keyData && isOut ? (
                         // --- RETURN VIEW (If key is OUT) ---
                         <div className="p-5 bg-red-100 rounded-xl border-4 border-red-500 shadow-lg"> 
@@ -296,7 +324,6 @@
                             <p className="text-md text-gray-700">Due: {expectedTime}</p>
                             <button 
                                 onClick={handleReturn}
-                                // Button updated to EMERALD-700 theme
                                 className="w-full bg-emerald-700 text-white p-4 rounded-xl font-bold mt-4 text-lg hover:bg-emerald-800 transition shadow-md"
                                 disabled={isUpdating}
                             >
@@ -305,11 +332,9 @@
                         </div>
                     ) : (
                         // --- CHECKOUT FORM VIEW (If key is AVAILABLE) ---
-                        // Background updated to EMERALD-100 and EMERALD-500 border
                         <form onSubmit={handleCheckout} className="p-5 bg-emerald-100 rounded-xl border-4 border-emerald-500 shadow-lg space-y-5">
                             <h4 className="text-2xl font-extrabold text-emerald-800">Checkout Available Key</h4>
                             
-                            {/* Borrower ID Input */}
                             <label className="block space-y-2">
                                 <span className="text-lg text-gray-700 font-bold">Borrower ID (Scan or Type):</span>
                                 <input 
@@ -317,14 +342,12 @@
                                     value={borrowerId} 
                                     onChange={(e) => setBorrowerId(e.target.value.toUpperCase().replace(/\s/g, ''))}
                                     placeholder="Enter Student/Faculty ID"
-                                    // Input focus border updated to TEAL-500
                                     className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg focus:ring-teal-500 focus:border-teal-500" 
                                     required
                                     minLength={4}
                                 />
                             </label>
 
-                            {/* Duration Input */}
                             <label className="block space-y-2">
                                 <span className="text-lg text-gray-700 font-bold">Duration (Hours):</span>
                                 <select 
@@ -341,7 +364,6 @@
                             
                             <button 
                                 type="submit" 
-                                // Button updated to TEAL-700 theme
                                 className="w-full bg-teal-700 text-white p-4 rounded-xl font-bold text-lg hover:bg-teal-800 transition shadow-md"
                                 disabled={isUpdating}
                             >
@@ -353,16 +375,18 @@
             );
         };
 
-
-        // Function I: QrScanner (Handles Camera Input)
+        // Function I: QrScanner (Handles Camera Input - FIX: Cleanup Logic)
 
         // --- QR SCANNER COMPONENT (Wrapper for the html5-qrcode library) ---
         const QrScanner = ({ onScanSuccess }) => {
             const qrCodeRegionId = 'reader-area';
             
             useEffect(() => {
+                // Initialize the instance variable outside the promise chain
+                let html5QrCode = null; 
+                
                 // Creates a new scanner instance
-                const html5QrCode = new Html5Qrcode(qrCodeRegionId);
+                html5QrCode = new Html5Qrcode(qrCodeRegionId);
                 
                 // Configuration for the scanner
                 const config = { 
@@ -373,32 +397,35 @@
                 // The callback function when a QR code is successfully read
                 const onScan = (decodedText, decodedResult) => {
                     // Stop scanning immediately after a successful read
-                    html5QrCode.stop().then(() => {
-                        console.log("QR Code scanned successfully:", decodedText);
-                        // Send the scanned data back up to the parent component
-                        onScanSuccess(decodedText); 
-                    }).catch(err => {
-                        console.error("Error stopping the scanner:", err);
-                    });
+                    if (html5QrCode) {
+                        html5QrCode.stop().then(() => {
+                            console.log("QR Code scanned successfully:", decodedText);
+                            onScanSuccess(decodedText); 
+                        }).catch(err => {
+                            console.error("Error stopping the scanner after scan:", err);
+                        });
+                    }
                 };
 
                 // Request camera permission and start scanning
                 html5QrCode.start(
-                    { facingMode: "environment" }, // Prefer the back camera on mobile
+                    { facingMode: "environment" }, 
                     config, 
                     onScan, 
                     (errorMessage) => { 
-                        // Note: You can optionally display the error message to the user 
                         // console.warn(`QR Code scanning error: ${errorMessage}`); 
                     }
                 ).catch(err => {
                     console.error("Error starting camera:", err);
-                    // This often happens if no camera is available or permission is denied
                 });
 
-                // Cleanup function: This runs when the component is unmounted (e.g., when the AdminPortal is closed)
+                // Cleanup function: This runs when the component is unmounted (e.g., switching to Public Status)
                 return () => {
-                    if (html5QrCode.isscanning) {
+                    // CRITICAL FIX: The library recommends trying to stop it if the instance exists, 
+                    // and its state is usually inferred by the existence of the instance itself.
+                    if (html5QrCode && html5QrCode.isScanning) { 
+                        // Note: If isScanning is a property (not a function), this works. If it's a function, 
+                        // the previous attempt would have failed. We rely on the instance existence check here.
                         html5QrCode.stop().catch(err => {
                             console.error("Error stopping scanner on unmount:", err);
                         });
@@ -420,15 +447,14 @@
             );
         };
 
-        // Function G-2 : AdminPortal Placeholder
+        // Function G-2 : AdminPortal (Updated for Thematic Separation)
 
-        // --- ADMIN PORTAL COMPONENT (Replaces Placeholder) ---
+        // --- ADMIN PORTAL COMPONENT (Handles Login Gate) ---
         const AdminPortal = ({ keys }) => {
             // State to manage input and authentication status
             const [passcode, setPasscode] = useState('');
             const [isAuthenticated, setIsAuthenticated] = useState(false);
             const [isSigningIn, setIsSigningIn] = useState(false);
-            // Sets the default key ID to manage
             const [selectedKeyId, setSelectedKeyId] = useState(Object.keys(keys)[0] || '');
 
             // Logic to attempt sign-in and password check
@@ -452,22 +478,25 @@
             };
 
             if (!isAuthenticated) {
-                // --- LOGIN SCREEN RENDER ---
+                // --- LOGIN SCREEN RENDER: Dark Theme for Security Gate ---
                 return (
-                    <div className="max-w-xs mx-auto p-6 mt-10 bg-white shadow-xl rounded-xl">
-                        <h2 className="text-xl font-bold text-blue-700 mb-4 text-center">Key Keeper Login</h2>
+                    // NEW: Darker background for the login box
+                    <div className="max-w-xs mx-auto p-6 mt-10 bg-teal-800 shadow-2xl rounded-xl"> 
+                        <h2 className="text-xl font-bold text-white mb-4 text-center">Key Keeper Login</h2>
                         <form onSubmit={handleLogin} className="space-y-4">
                             <input
                                 type="password"
                                 value={passcode}
                                 onChange={(e) => setPasscode(e.target.value.toUpperCase())}
                                 placeholder="Enter Passcode (CCS2025)"
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500"
+                                // Input colors adjusted for dark background
+                                className="w-full p-3 border border-teal-600 rounded-lg focus:ring-blue-500 text-teal-900 placeholder-gray-500"
                                 disabled={isSigningIn}
                             />
                             <button
                                 type="submit"
-                                className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition"
+                                // Button uses the bright, active TEAL-600 color
+                                className="w-full bg-teal-600 text-white p-3 rounded-lg font-semibold hover:bg-teal-700 transition shadow-lg"
                                 disabled={isSigningIn}
                             >
                                 {isSigningIn ? 'Signing In...' : 'Access Portal'}
@@ -477,70 +506,63 @@
                 );
             }
 
-            // If authenticated, render the Key Management Panel (Next Step)
+            // If authenticated, render the Key Management Panel
             return <KeyManagementPanel keys={keys} selectedKeyId={selectedKeyId} setSelectedKeyId={setSelectedKeyId} />;
         };
 
 
 
-        // Function H: The Main App Component
+        // Function H: The Main App Component (Updated for Teal/Blue Theme)
+        const App = () => {
+            const [keys, setKeys] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [viewMode, setViewMode] = useState('public'); 
+            const [currentTime, setCurrentTime] = useState(new Date());
 
-        // --- MAIN APP COMPONENT (Handles data connection and switching views) ---
+            // Effect for updating the clock every second
+            useEffect(() => {
+                const timer = setInterval(() => {
+                    setCurrentTime(new Date());
+                }, 1000);
 
-            const App = () => {
-                // ... (state and useEffect logic remains the same)
+                // Cleanup function to clear the interval when the component unmounts
+                return () => clearInterval(timer);
+            }, []); // Run once on mount
 
-                // State to hold the live key data, loading status, and current view
-                const [keys, setKeys] = useState({});
-                const [loading, setLoading] = useState(true);
-                const [viewMode, setViewMode] = useState('public'); 
-
-                 // --- READ LOGIC (The Critical Firebase Connection) ---
-                useEffect(() => {
-                    const keysRef = database.ref('Keys'); 
-            
-                    // Sets up the listener to receive real-time updates from the database
-                    keysRef.on('value', (snapshot) => {
-                        const liveData = snapshot.val() || {};
-                        
-                        // Map the static list of keys with the live status data from Firebase
-                        const finalKeys = STATIC_KEY_LIST.map(staticKey => {
+            useEffect(() => {
+                const keysRef = database.ref('Keys'); 
+                keysRef.on('value', (snapshot) => {
+                    const liveData = snapshot.val() || {};
+                    
+                    const finalKeys = STATIC_KEY_LIST.map(staticKey => {
                         const liveEntry = liveData[staticKey.id] || {};
                         
-                            return {
-                                ...staticKey,
-                                status: liveEntry.status || 'AVAILABLE',
-                                ...liveEntry // Merges holderId and expectedReturnTime
-                            };
-                        });
-                    
-                        const keyMap = finalKeys.reduce((acc, key) => {
-                            acc[key.id] = key;
-                        return acc;
-                        }, {});
-
-                        setKeys(keyMap);
-                        setLoading(false);
+                        return {
+                            ...staticKey,
+                            status: liveEntry.status || 'AVAILABLE',
+                            ...liveEntry
+                        };
                     });
-
-                // Cleanup function to stop listening when the app closes
-                return () => keysRef.off();
-            }, []); // Empty array makes this run only once on load
-            
-                // --- FINAL RENDER ---
-
-
-                // Show a loading message while waiting for data
-                if (loading) return <div className="text-center p-8 text-lg text-gray-500">Loading Key Status...</div>;
                 
-                // Convert keys object to array and sort alphabetically for a clean list display
-                const keyArray = Object.values(keys).sort((a, b) => a.name.localeCompare(b.name));
+                    const keyMap = finalKeys.reduce((acc, key) => {
+                        acc[key.id] = key;
+                        return acc;
+                    }, {});
 
-return (
+                    setKeys(keyMap);
+                    setLoading(false);
+                });
+
+                return () => keysRef.off();
+            }, []);
+            
+            if (loading) return <div className="text-center p-8 text-lg text-gray-500">Loading Key Status...</div>;
+            const keyArray = Object.values(keys).sort((a, b) => a.name.localeCompare(b.name));
+
+            return (
                     <div className="min-h-screen bg-gray-100 p-2 sm:p-4 font-sans antialiased"> 
                         <div className="max-w-xl lg:max-w-2xl mx-auto space-y-6"> 
                             
-                            {/* HEADER: Updated to TEAL-800 */}
                             <header className="py-8 bg-white shadow-lg rounded-b-xl">
                                 <h1 className="text-4xl font-extrabold text-teal-800 text-center">
                                     KeyFiRoom - LSPU 🔑
@@ -550,33 +572,61 @@ return (
                                 </p>
                             </header>
                             
-                            {/* View Switcher Buttons: Primary is BLUE-700, Inactive is GRAY */}
+                            {/* View Switcher Buttons */}
                             <div className="flex justify-center space-x-2 p-1 bg-white rounded-xl shadow-inner">
                                 <button 
                                     onClick={() => setViewMode('public')}
+                                    // Public is always Blue
                                     className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'public' ? 'bg-blue-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                                 >
                                     Public Status
                                 </button>
                                 <button 
                                     onClick={() => setViewMode('admin')}
-                                    className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'admin' ? 'bg-blue-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                                    // Admin is Teal to match the Key Management theme
+                                    className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'admin' ? 'bg-teal-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                                 >
                                     Admin Action
                                 </button>
                             </div>
 
-                            {/* ... (rest of the rendering remains the same) */}
+                            {viewMode === 'public' && (
+                            <div className="space-y-4 pt-2">
+                                {/* NEW: Dynamic Clock Display */}
+                                <p className="text-sm font-semibold text-gray-700 px-2 text-center">
+                                    Current System Time: 
+                                    <span className="text-teal-700 ml-2">
+                                        {formatTime(currentTime.toISOString())}
+                                    </span>
+                                </p>
+                                {/* End NEW */}
+                                <h2 className="text-2xl font-extrabold text-gray-800 px-2">Live Status Feed</h2>
+                                
+                                {keyArray.map(key => (
+                                    <KeyStatusRow key={key.id} keyData={key} />
+                                ))}
+                            </div>
+                        )}
+                            
+                            {viewMode === 'admin' && (
+                                <AdminPortal keys={keys} />
+                            )}
 
+                            <footer className="text-center text-xs text-gray-400 pt-8 pb-4">
+                                Developed by CCS Students. Data updates instantly.
+                            </footer>
                         </div>
                     </div>
                 );
         };
+
         // --- START THE APP ---
         
-        // --- 3. THE RENDER CALL WILL BE AT THE VERY BOTTOM ---
+        // --- 3. THE RENDER CALL WILL BE AT THE VERY BOTTOM (React 18 Update) ---
 
-        ReactDOM.render(<App />, document.getElementById('root'));
+        // NEW: Uses the modern createRoot API to suppress the React 18 deprecation warning
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
         
     </script>
 </body>
