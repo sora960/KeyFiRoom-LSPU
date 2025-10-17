@@ -42,25 +42,8 @@
         const app = firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
         const auth = firebase.auth(); 
-
-        // FORCING INITIAL READ TO ENSURE BROWSER GETS DATA
-        database.ref('Keys').once('value', (snapshot) => {
-        // This line is a temporary check that forces the browser to pull data on load.
-        if (snapshot.exists()) {
-        console.log("Firebase Read Success!");
-        } else {
-        console.error("Firebase Read Error: The 'Keys' node is empty or missing.");
-        }
-        });
         
-        const STATIC_KEY_LIST = [
-            { id: 'LAB_4_SERVERS', name: 'Lab 4 Server Key', location: 'CCS Building' },
-            { id: 'ROOM_305_LECTURE', name: 'Lecture Hall 305 Key', location: 'CCS Building' },
-            { id: 'FACULTY_OFFICE_B', name: 'Faculty Office B Key', location: 'Admin Annex' },
-            // Add other keys here up to 10...
-        ];
-        
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
 
         // --- 2. JAVASCRIPT/REACT CODE WILL START HERE ---
 
@@ -121,7 +104,7 @@
              // This function sends the data to the correct path in the database
              const keyRef = database.ref(`Keys/${keyId}`); 
 
-            return keyRef.set(updates); 
+            return keyRef.update(updates); 
         };
 
 
@@ -178,12 +161,25 @@
             return keyRef.set(statusUpdates); 
         };
 
-        // Function F: KeyStatusRow (The Visual Element - Updated for Countdown)
+        // New Function: deleteKey
+        const deleteKey = (keyId) => {
+            const keyRef = database.ref(`Keys/${keyId}`);
+            return keyRef.remove();
+        };
+
+        // Function F: KeyStatusRow (The Visual Element - DEFENSIVE FIX)
         const KeyStatusRow = ({ keyData }) => {
+            
+            // CRITICAL FIX: If the data is corrupt (missing name or location), do not attempt to render the row.
+            // This prevents the rendering error and cleans up the UI instantly.
+            if (!keyData || !keyData.name || !keyData.location) {
+                // You can return null to skip rendering the corrupt row entirely,
+                // or render a placeholder for debugging. Returning null is cleaner for a finished product.
+                return null; 
+            }
 
             const isOut = keyData.status === 'OUT';
             const isOverdue = isKeyOverdue(keyData.expectedReturnTime); 
-            // NEW: Calculate time left
             const timeLeft = calculateTimeLeft(keyData.expectedReturnTime);
 
             const statusColor = isOverdue 
@@ -198,6 +194,7 @@
                 <div className="flex flex-col p-5 mb-3 border-none rounded-2xl shadow-xl bg-white transition hover:shadow-2xl">
                     
                     <div className="flex items-center justify-between">
+                        {/* The name is now guaranteed to exist by the check above */}
                         <span className="text-2xl font-extrabold text-teal-800">{keyData.name}</span>
                         <span className={`px-4 py-1 text-sm font-bold rounded-full ${statusColor}`}>
                             {statusText}
@@ -208,13 +205,12 @@
                         <p>Location: {keyData.location}</p>
                         {isOut && (
                             <>
-                                {/* CHANGE: Conditional Display for Countdown vs. Due Time */}
                                 <p className={`font-extrabold mt-1 ${isOverdue ? 'text-red-700' : 'text-red-600'}`}>
                                     {isOverdue 
                                         ? 'OVERDUE SINCE: ' + formatTime(keyData.expectedReturnTime)
                                         : timeLeft
-                                            ? 'AVAILABLE IN: ' + timeLeft // Display Countdown
-                                            : 'DUE BACK: ' + formatTime(keyData.expectedReturnTime) // Fallback or Edge Case
+                                            ? 'AVAILABLE IN: ' + timeLeft
+                                            : 'DUE BACK: ' + formatTime(keyData.expectedReturnTime)
                                     }
                                 </p>
                                 <p className="text-sm">Checked Out By: ID {keyData.holderId || 'Unknown'}</p>
@@ -225,20 +221,34 @@
             );
         };
 
-        // Function G-1 : KeyManagementPanel (The Key Keeper Forms and Logic - FIX AND THEME)
+        // Function G-1 : KeyManagementPanel (The Key Keeper Forms and Logic - ABSOLUTE FINAL STRUCTURE)
 
         // --- KEY MANAGEMENT PANEL (Handles Checkout/Return Forms and Logic) ---
         const KeyManagementPanel = ({ keys, selectedKeyId, setSelectedKeyId }) => {
-            // Finds the current key's status from the main data array
             const keyData = keys[selectedKeyId];
             const [borrowerId, setBorrowerId] = useState('');
-            const [duration, setDuration] = useState(2); // Default duration
+            const [duration, setDuration] = useState(2);
             const [isUpdating, setIsUpdating] = useState(false);
+            const [editMode, setEditMode] = useState(false);
+            const [editName, setEditName] = useState('');
+            const [editLocation, setEditLocation] = useState('');
 
             const isOut = keyData && keyData.status === 'OUT';
             const expectedTime = keyData && keyData.expectedReturnTime ? formatTime(keyData.expectedReturnTime) : 'N/A';
+            
+            useEffect(() => {
+                if (keyData) {
+                    setEditName(keyData.name || '');
+                    setEditLocation(keyData.location || '');
+                }
+                setEditMode(false);
+            }, [selectedKeyId, keyData]);
 
-            // --- QR SCAN HANDLING LOGIC (remains the same) ---
+            // --- ALL EVENT HANDLERS DEFINED FIRST ---
+
+            // CRITICAL FIX: Robust Status Check is implemented inside handleCheckout
+
+            // --- QR SCAN HANDLING LOGIC ---
             const handleScan = (scannedText) => { 
                 const isBorrowerId = scannedText.length > 5 && !isNaN(scannedText); 
                 if (isBorrowerId) {
@@ -251,25 +261,34 @@
                     alert(`Scan failed: Scanned text "${scannedText}" does not match a Key or Borrower ID format.`);
                 }
             };
-
+            
             // --- CHECKOUT LOGIC (Digital Logbook Entry) ---
             const handleCheckout = async (e) => {
                 e.preventDefault();
+                
+                // CRITICAL FIX: Ensure a valid key is selected and all required inputs are present
+                if (!keyData || !selectedKeyId) {
+                    alert("Error: Please select a valid key to manage.");
+                    return;
+                }
                 if (!borrowerId || duration < 1) {
                     alert("Borrower ID and Duration are required.");
                     return;
                 }
-                if (!keyData || keyData.status === 'OUT') {
-                    alert("Error: Key is already checked out.");
+
+                // CRITICAL FIX: Robust Status Check
+                const currentStatus = keyData ? keyData.status : 'AVAILABLE';
+                
+                if (currentStatus !== 'AVAILABLE') {
+                    alert("Error: Key is already checked out or status is corrupted. Current status: " + currentStatus);
                     return;
                 }
-
+                
                 setIsUpdating(true);
                 try {
                     await signInAdmin(); 
                     const expectedReturnTime = calculateReturnTime(duration);
                     
-                    // 1. Update the Key Status (Overwrites the key status)
                     const updates = {
                         status: 'OUT',
                         holderId: borrowerId,
@@ -278,16 +297,15 @@
                     };
                     await writeKeyStatus(selectedKeyId, updates);
 
-                    // 2. CRITICAL NEW: Create Permanent Log Entry
                     await database.ref('Logs').push({
                         action: 'CHECKOUT',
                         keyId: selectedKeyId,
-                        borrowerId: borrowerId,
+                        borrowerId: borrowerId || 'ERROR_UNDEFINED',
                         duration: duration,
                         timestamp: new Date().toISOString(),
                         expectedReturnTime: expectedReturnTime,
                     });
-
+                    
                     alert(`Key ${keyData.name} checked out to ID ${borrowerId} until ${formatTime(expectedReturnTime)}.`);
                     setBorrowerId('');
 
@@ -298,7 +316,7 @@
                     setIsUpdating(false);
                 }
             };
-
+            
             // --- RETURN LOGIC (Resets status to AVAILABLE) ---
             const handleReturn = async () => {
                 if (!confirm(`Are you sure you want to mark ${keyData.name} as returned?`)) return;
@@ -307,9 +325,6 @@
                 try {
                     await signInAdmin(); 
 
-
-
-                    // 1. Update the Key Status
                     const updates = {
                         status: 'AVAILABLE',
                         holderId: null,
@@ -317,14 +332,12 @@
                         expectedReturnTime: null,
                     };
                     await writeKeyStatus(selectedKeyId, updates);
-
-
-                    // 2. CRITICAL NEW: Create Permanent Log Entry for Return
+                    
                     await database.ref('Logs').push({
                         action: 'RETURN',
                         keyId: selectedKeyId,
-                        borrowerId: keyData.holderId, // Use the ID from the current keyData
-                        timestamp: new Date().toISOString(),
+                        borrowerId: keyData.holderId,
+                        timestamp: new Date().toISOString(), 
                     });
 
                     alert(`Key ${keyData.name} marked as AVAILABLE.`);
@@ -338,7 +351,60 @@
                 }
             };
 
-            // --- RENDER THE CHECKOUT/RETURN FORM ---
+            // --- EDIT LOGIC ---
+            const handleEdit = async (e) => {
+                e.preventDefault();
+                if (!editName || !editLocation) {
+                    alert("Name and Location are required.");
+                    return;
+                }
+
+                setIsUpdating(true);
+                try {
+                    await signInAdmin();
+                    const updates = {
+                        name: editName,
+                        location: editLocation,
+                    };
+                    await writeKeyStatus(selectedKeyId, updates);
+                    alert(`Key ${editName} updated successfully.`);
+                    setEditMode(false);
+                } catch (error) {
+                    console.error("Edit failed:", error);
+                    alert('Edit Failed: ' + error.message);
+                } finally {
+                    setIsUpdating(false);
+                }
+            };
+
+            // --- DELETE LOGIC ---
+            const handleDelete = async () => {
+                if (!confirm(`Are you sure you want to delete ${keyData.name}? This action cannot be undone.`)) return;
+
+                setIsUpdating(true);
+                try {
+                    await signInAdmin();
+                    await deleteKey(selectedKeyId);
+                    alert(`Key ${keyData.name} deleted successfully.`);
+                    setSelectedKeyId(Object.keys(keys)[0] || '');
+                } catch (error) {
+                    console.error("Delete failed:", error);
+                    alert('Delete Failed: ' + error.message);
+                } finally {
+                    setIsUpdating(false);
+                }
+            };
+
+            // --- useEffect and REST OF LOGIC ---
+            // CRITICAL FIX 3: Reset selected key if it disappears 
+            useEffect(() => {
+                if (selectedKeyId && !keys[selectedKeyId]) {
+                    setSelectedKeyId(Object.keys(keys)[0] || '');
+                }
+            }, [keys, selectedKeyId]);
+
+
+            // --- RENDER (JSX) BLOCK HERE ---
             return (
                 <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6"> 
                     <h3 className="text-3xl font-bold text-teal-800 border-b pb-3 mb-4">Key Management</h3>
@@ -354,6 +420,7 @@
                             onChange={(e) => setSelectedKeyId(e.target.value)}
                             className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white focus:ring-teal-500 focus:border-teal-500"
                         >
+                            <option value="">-- Select a Key --</option>
                             {Object.keys(keys).map(id => (
                                 <option key={id} value={id}>
                                     {keys[id].name} - ({keys[id].status})
@@ -362,59 +429,117 @@
                         </select>
                     </label>
 
-                    {keyData && isOut ? (
-                        // --- RETURN VIEW (If key is OUT) ---
-                        <div className="p-5 bg-red-100 rounded-xl border-4 border-red-500 shadow-lg"> 
-                            <p className="text-xl font-bold text-red-800 mb-2">Key is currently OUT to ID {keyData.holderId}</p>
-                            <p className="text-md text-gray-700">Due: {expectedTime}</p>
-                            <button 
-                                onClick={handleReturn}
-                                className="w-full bg-emerald-700 text-white p-4 rounded-xl font-bold mt-4 text-lg hover:bg-emerald-800 transition shadow-md"
-                                disabled={isUpdating}
-                            >
-                                {isUpdating ? 'Processing Return...' : 'Mark Key as RETURNED'}
-                            </button>
-                        </div>
-                    ) : (
-                        // --- CHECKOUT FORM VIEW (If key is AVAILABLE) ---
-                        <form onSubmit={handleCheckout} className="p-5 bg-emerald-100 rounded-xl border-4 border-emerald-500 shadow-lg space-y-5">
-                            <h4 className="text-2xl font-extrabold text-emerald-800">Checkout Available Key</h4>
-                            
-                            <label className="block space-y-2">
-                                <span className="text-lg text-gray-700 font-bold">Borrower ID (Scan or Type):</span>
-                                <input 
-                                    type="text" 
-                                    value={borrowerId} 
-                                    onChange={(e) => setBorrowerId(e.target.value.toUpperCase().replace(/\s/g, ''))}
-                                    placeholder="Enter Student/Faculty ID"
-                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg focus:ring-teal-500 focus:border-teal-500" 
-                                    required
-                                    minLength={4}
-                                />
-                            </label>
+                    {selectedKeyId && keyData ? (
+                        <>
+                            {isOut ? (
+                                <div className="p-5 bg-red-100 rounded-xl border-4 border-red-500 shadow-lg"> 
+                                    <p className="text-xl font-bold text-red-800 mb-2">Key is currently OUT to ID {keyData.holderId}</p>
+                                    <p className="text-md text-gray-700">Due: {expectedTime}</p>
+                                    <button 
+                                        onClick={handleReturn}
+                                        className="w-full bg-emerald-700 text-white p-4 rounded-xl font-bold mt-4 text-lg hover:bg-emerald-800 transition shadow-md"
+                                        disabled={isUpdating}
+                                    >
+                                        {isUpdating ? 'Processing Return...' : 'Mark Key as RETURNED'}
+                                    </button>
+                                </div>
+                            ) : (
+                                <form onSubmit={handleCheckout} className="p-5 bg-emerald-100 rounded-xl border-4 border-emerald-500 shadow-lg space-y-5">
+                                    <h4 className="text-2xl font-extrabold text-emerald-800">Checkout Available Key</h4>
+                                    
+                                    <label className="block space-y-2">
+                                        <span className="text-lg text-gray-700 font-bold">Borrower ID (Scan or Type):</span>
+                                        <input 
+                                            type="text" 
+                                            value={borrowerId} 
+                                            onChange={(e) => setBorrowerId(e.target.value.toUpperCase().replace(/\s/g, ''))}
+                                            placeholder="Enter Student/Faculty ID"
+                                            className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg focus:ring-teal-500 focus:border-teal-500" 
+                                            required
+                                            minLength={4}
+                                        />
+                                    </label>
 
-                            <label className="block space-y-2">
-                                <span className="text-lg text-gray-700 font-bold">Duration (Hours):</span>
-                                <select 
-                                    value={duration} 
-                                    onChange={(e) => setDuration(parseInt(e.target.value))}
-                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white"
+                                    <label className="block space-y-2">
+                                        <span className="text-lg text-gray-700 font-bold">Duration (Hours):</span>
+                                        <select 
+                                            value={duration} 
+                                            onChange={(e) => setDuration(parseInt(e.target.value))}
+                                            className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white"
+                                        >
+                                            <option value={1}>1 Hour</option>
+                                            <option value={2}>2 Hours</option>
+                                            <option value={4}>4 Hours</option>
+                                            <option value={8}>8 Hours (Full Day)</option>
+                                        </select>
+                                    </label>
+                                    
+                                    <button 
+                                        type="submit" 
+                                        className="w-full bg-teal-700 text-white p-4 rounded-xl font-bold text-lg hover:bg-teal-800 transition shadow-md"
+                                        disabled={isUpdating}
+                                    >
+                                        {isUpdating ? 'Processing...' : 'CHECKOUT Key'}
+                                    </button>
+                                </form>
+                            )}
+
+                            {/* Edit/Delete Section */}
+                            <div className="mt-6 flex space-x-4">
+                                <button 
+                                    onClick={() => setEditMode(!editMode)}
+                                    className="flex-1 bg-yellow-600 text-white p-3 rounded-xl font-bold hover:bg-yellow-700 transition shadow-md"
+                                    disabled={isUpdating || !keyData}
                                 >
-                                    <option value={1}>1 Hour</option>
-                                    <option value={2}>2 Hours</option>
-                                    <option value={4}>4 Hours</option>
-                                    <option value={8}>8 Hours (Full Day)</option>
-                                </select>
-                            </label>
-                            
-                            <button 
-                                type="submit" 
-                                className="w-full bg-teal-700 text-white p-4 rounded-xl font-bold text-lg hover:bg-teal-800 transition shadow-md"
-                                disabled={isUpdating}
-                            >
-                                {isUpdating ? 'Processing...' : 'CHECKOUT Key'}
-                            </button>
-                        </form>
+                                    {editMode ? 'Cancel Edit' : 'Edit Key'}
+                                </button>
+                                <button 
+                                    onClick={handleDelete}
+                                    className="flex-1 bg-red-600 text-white p-3 rounded-xl font-bold hover:bg-red-700 transition shadow-md"
+                                    disabled={isUpdating || !keyData}
+                                >
+                                    Delete Key
+                                </button>
+                            </div>
+
+                            {editMode && (
+                                <form onSubmit={handleEdit} className="p-5 bg-yellow-100 rounded-xl border-4 border-yellow-500 shadow-lg space-y-5">
+                                    <h4 className="text-2xl font-extrabold text-yellow-800">Edit Key Details</h4>
+                                    
+                                    <label className="block space-y-2">
+                                        <span className="text-lg text-gray-700 font-bold">Key Name:</span>
+                                        <input 
+                                            type="text" 
+                                            value={editName} 
+                                            onChange={(e) => setEditName(e.target.value)}
+                                            className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg focus:ring-teal-500 focus:border-teal-500" 
+                                            required
+                                        />
+                                    </label>
+
+                                    <label className="block space-y-2">
+                                        <span className="text-lg text-gray-700 font-bold">Location:</span>
+                                        <input 
+                                            type="text" 
+                                            value={editLocation} 
+                                            onChange={(e) => setEditLocation(e.target.value)}
+                                            className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg focus:ring-teal-500 focus:border-teal-500" 
+                                            required
+                                        />
+                                    </label>
+                                    
+                                    <button 
+                                        type="submit" 
+                                        className="w-full bg-yellow-700 text-white p-4 rounded-xl font-bold text-lg hover:bg-yellow-800 transition shadow-md"
+                                        disabled={isUpdating}
+                                    >
+                                        {isUpdating ? 'Saving...' : 'Save Changes'}
+                                    </button>
+                                </form>
+                            )}
+                        </>
+                    ) : (
+                        <p className="text-center text-gray-500">Select a key to manage.</p>
                     )}
                 </div>
             );
@@ -425,58 +550,56 @@
         // --- QR SCANNER COMPONENT (Wrapper for the html5-qrcode library) ---
         const QrScanner = ({ onScanSuccess }) => {
             const qrCodeRegionId = 'reader-area';
+            const [isScanning, setIsScanning] = useState(false);
+            const html5QrCode = useRef(null);
             
             useEffect(() => {
-                // Initialize the instance variable outside the promise chain
-                let html5QrCode = null; 
+                html5QrCode.current = new Html5Qrcode(qrCodeRegionId);
                 
-                // Creates a new scanner instance
-                html5QrCode = new Html5Qrcode(qrCodeRegionId);
-                
-                // Configuration for the scanner
+                return () => {
+                    if (html5QrCode.current && html5QrCode.current.isScanning) {
+                        html5QrCode.current.stop().catch(err => {
+                            console.error("Error stopping scanner on unmount:", err);
+                        });
+                    }
+                };
+            }, []); // Empty dependency array ensures this runs once
+
+            const startScanning = () => {
                 const config = { 
                     fps: 10, 
                     qrbox: { width: 250, height: 250 } 
                 };
 
-                // The callback function when a QR code is successfully read
                 const onScan = (decodedText, decodedResult) => {
-                    // Stop scanning immediately after a successful read
-                    if (html5QrCode) {
-                        html5QrCode.stop().then(() => {
-                            console.log("QR Code scanned successfully:", decodedText);
-                            onScanSuccess(decodedText); 
-                        }).catch(err => {
-                            console.error("Error stopping the scanner after scan:", err);
-                        });
-                    }
+                    stopScanning();
+                    console.log("QR Code scanned successfully:", decodedText);
+                    onScanSuccess(decodedText); 
                 };
 
-                // Request camera permission and start scanning
-                html5QrCode.start(
+                html5QrCode.current.start(
                     { facingMode: "environment" }, 
                     config, 
                     onScan, 
                     (errorMessage) => { 
                         // console.warn(`QR Code scanning error: ${errorMessage}`); 
                     }
-                ).catch(err => {
+                ).then(() => {
+                    setIsScanning(true);
+                }).catch(err => {
                     console.error("Error starting camera:", err);
                 });
+            };
 
-                // Cleanup function: This runs when the component is unmounted (e.g., switching to Public Status)
-                return () => {
-                    // CRITICAL FIX: The library recommends trying to stop it if the instance exists, 
-                    // and its state is usually inferred by the existence of the instance itself.
-                    if (html5QrCode && html5QrCode.isScanning) { 
-                        // Note: If isScanning is a property (not a function), this works. If it's a function, 
-                        // the previous attempt would have failed. We rely on the instance existence check here.
-                        html5QrCode.stop().catch(err => {
-                            console.error("Error stopping scanner on unmount:", err);
-                        });
-                    }
-                };
-            }, []); // Empty dependency array ensures this runs once
+            const stopScanning = () => {
+                if (html5QrCode.current && html5QrCode.current.isScanning) {
+                    html5QrCode.current.stop().then(() => {
+                        setIsScanning(false);
+                    }).catch(err => {
+                        console.error("Error stopping the scanner:", err);
+                    });
+                }
+            };
 
             // The component only needs a single div element to host the camera feed
             return (
@@ -485,6 +608,12 @@
                     <div id={qrCodeRegionId} className="w-full h-64 border-2 border-dashed border-gray-300 rounded-lg overflow-hidden">
                         {/* Camera view will render here */}
                     </div>
+                    <button 
+                        onClick={isScanning ? stopScanning : startScanning}
+                        className="w-full mt-2 bg-blue-500 text-white p-2 rounded font-bold hover:bg-blue-600"
+                    >
+                        {isScanning ? 'Stop Scanning' : 'Start Scanning'}
+                    </button>
                     <p className="text-sm text-gray-500 mt-2 text-center">
                         Point the camera at the Key or Borrower ID QR code.
                     </p>
@@ -585,7 +714,7 @@
                 
                 // Order logs by the timestamp and limit to the last 20 entries
                 // 'child_added' is efficient for building an ordered list
-                logsRef.limitToLast(20).on('value', (snapshot) => {
+                logsRef.orderByChild('timestamp').limitToLast(20).on('value', (snapshot) => {
                     const logsArray = [];
                     snapshot.forEach(childSnapshot => {
                         // Push the log data along with its Firebase unique ID
@@ -626,8 +755,12 @@
                                         </span>
                                         <span className="ml-2 font-extrabold text-teal-800">{log.keyId}</span>
                                     </span>
+                                    {/* The robust timestamp display is here */}
                                     <span className="text-xs text-gray-500">
-                                        {new Date(log.timestamp).toLocaleDateString()} {formatTime(log.timestamp)}
+                                        {log.timestamp 
+                                            ? `${new Date(log.timestamp).toLocaleDateString()} ${formatTime(log.timestamp)}`
+                                            : 'N/A'
+                                        }
                                     </span>
                                 </p>
                                 <p className="text-xs mt-1 text-gray-600">
@@ -649,7 +782,7 @@
             const [passcode, setPasscode] = useState('');
             const [isAuthenticated, setIsAuthenticated] = useState(false);
             const [isSigningIn, setIsSigningIn] = useState(false);
-            const [selectedKeyId, setSelectedKeyId] = useState(Object.keys(keys)[0] || '');
+            const [selectedKeyId, setSelectedKeyId] = useState(() => Object.keys(keys).find(id => keys[id] && keys[id].name) || Object.keys(keys)[0] || '');
 
             // Logic to attempt sign-in and password check
             const handleLogin = async (e) => {
@@ -719,58 +852,57 @@
 
 
 
-        // Function H: The Main App Component (Updated for Teal/Blue Theme)
+        // Function H: The Main App Component (Final Fixed Structure)
         const App = () => {
             const [keys, setKeys] = useState({});
             const [loading, setLoading] = useState(true);
             const [viewMode, setViewMode] = useState('public'); 
             const [currentTime, setCurrentTime] = useState(new Date());
 
-            // Effect for updating the clock every second
+            // Effect 1: Clock (Drives Countdown and Public Time)
             useEffect(() => {
                 const timer = setInterval(() => {
                     setCurrentTime(new Date());
                 }, 1000);
-
-                // Cleanup function to clear the interval when the component unmounts
                 return () => clearInterval(timer);
-            }, []); // Run once on mount
+            }, []);
 
+            // Effect 2: Firebase Data Fetching
             useEffect(() => {
                 const keysRef = database.ref('Keys'); 
-                keysRef.on('value', (snapshot) => {
-                    const liveData = snapshot.val() || {};
-                    
-                    const finalKeys = STATIC_KEY_LIST.map(staticKey => {
-                        const liveEntry = liveData[staticKey.id] || {};
-                        
-                        return {
-                            ...staticKey,
-                            status: liveEntry.status || 'AVAILABLE',
-                            ...liveEntry
-                        };
-                    });
                 
-                    const keyMap = finalKeys.reduce((acc, key) => {
-                        acc[key.id] = key;
-                        return acc;
-                    }, {});
-
-                    setKeys(keyMap);
+                keysRef.on('value', (snapshot) => {
+                    const liveData = snapshot.val();
+                    
+                    if (liveData) {
+                        setKeys(liveData);
+                    } else {
+                        setKeys({});
+                    }
+                    
                     setLoading(false);
                 });
 
                 return () => keysRef.off();
-            }, []);
+            }, []); 
             
-            if (loading) return <div className="text-center p-8 text-lg text-gray-500">Loading Key Status...</div>;
+            
+            // CRITICAL FIX: Add defensive check to sorting to prevent "a.name is undefined" error
+                const keyArray = Object.keys(keys)
+                .map(keyId => ({
+                    // Inject the unique Firebase key name as the 'id' property
+                    id: keyId, 
+                    ...keys[keyId] // Spread the rest of the key data (name, location, status, etc.)
+                }))
+                // Now perform the defensive sort using the guaranteed 'name' property
+                .sort((a, b) => {
+                    const nameA = a.name || '';
+                    const nameB = b.name || '';
+                    return nameA.localeCompare(nameB);
+                });
 
-
-            // 1. Data Processing and Sorting (Must be BEFORE the loading check)
-            // This is the line that was likely misplaced or missing.
-            const keyArray = Object.values(keys).sort((a, b) => a.name.localeCompare(b.name));
-
-            // 2. Show a loading message while waiting for data
+            
+            // Conditional Loading Check (Uses the themed spinner)
             if (loading) return (
                 <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-8">
                     <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent border-solid rounded-full animate-spin"></div>
@@ -783,7 +915,7 @@
                 </div>
             );
 
-            // 3. FINAL RENDER (keyArray is now guaranteed to exist here)
+            // Final Render
             return (
                     <div className="min-h-screen bg-gray-100 p-2 sm:p-4 font-sans antialiased"> 
                         <div className="max-w-xl lg:max-w-2xl mx-auto space-y-6"> 
@@ -801,14 +933,12 @@
                             <div className="flex justify-center space-x-2 p-1 bg-white rounded-xl shadow-inner">
                                 <button 
                                     onClick={() => setViewMode('public')}
-                                    // Public is always Blue
                                     className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'public' ? 'bg-blue-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                                 >
                                     Public Status
                                 </button>
                                 <button 
                                     onClick={() => setViewMode('admin')}
-                                    // Admin is Teal to match the Key Management theme
                                     className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'admin' ? 'bg-teal-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                                 >
                                     Admin Action
@@ -816,22 +946,25 @@
                             </div>
 
                             {viewMode === 'public' && (
-                            <div className="space-y-4 pt-2">
-                                {/* NEW: Dynamic Clock Display */}
-                                <p className="text-sm font-semibold text-gray-700 px-2 text-center">
-                                    Current System Time: 
-                                    <span className="text-teal-700 ml-2">
-                                        {formatTime(currentTime.toISOString())}
-                                    </span>
-                                </p>
-                                {/* End NEW */}
-                                <h2 className="text-2xl font-extrabold text-gray-800 px-2">Live Status Feed</h2>
-                                
-                                {keyArray.map(key => (
-                                    <KeyStatusRow key={key.id} keyData={key} />
-                                ))}
-                            </div>
-                        )}
+                                <div className="space-y-4 pt-2">
+                                    {/* Dynamic Clock Display */}
+                                    <p className="text-sm font-semibold text-gray-700 px-2 text-center">
+                                        Current System Time: 
+                                        <span className="text-teal-700 ml-2">
+                                            {formatTime(currentTime.toISOString())}
+                                        </span>
+                                    </p>
+                                    <h2 className="text-2xl font-extrabold text-gray-800 px-2">Live Status Feed</h2>
+                                    
+                                    {keyArray.length > 0 ? (
+                                        keyArray.map(key => (
+                                            <KeyStatusRow key={key.id} keyData={key} />
+                                        ))
+                                    ) : (
+                                        <p className="text-center text-gray-500">No keys available yet.</p>
+                                    )}
+                                </div>
+                            )}
                             
                             {viewMode === 'admin' && (
                                 <AdminPortal keys={keys} />
