@@ -774,6 +774,148 @@
             );
         };
 
+
+        // Function J: UserAuth (Handles Registration and Login)
+
+            const UserAuth = ({ onLoginSuccess }) => {
+                const [isRegistering, setIsRegistering] = useState(false);
+                const [email, setEmail] = useState('');
+                const [password, setPassword] = useState('');
+                const [borrowerId, setBorrowerId] = useState(''); // NEW: The Student/Faculty ID
+                const [isProcessing, setIsProcessing] = useState(false);
+                const [error, setError] = useState('');
+
+                const handleAuth = async (e) => {
+                    e.preventDefault();
+                    setError('');
+                    setIsProcessing(true);
+
+                    try {
+                        if (isRegistering) {
+                            // 1. Create User in Firebase Authentication
+                            const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+                            
+                            // 2. Store user data (Borrower ID) in Firebase Realtime Database
+                            await database.ref(`Borrowers/${userCredential.user.uid}`).set({
+                                email: email,
+                                borrowerId: borrowerId.toUpperCase(), // Standardize ID format
+                                createdAt: new Date().toISOString(),
+                            });
+                            
+                            alert('Registration successful! Please log in.');
+                            setIsRegistering(false); // Switch to login after registration
+
+                        } else {
+                            // 1. Sign In User
+                            const userCredential = await auth.signInWithEmailAndPassword(email, password);
+                            
+                            // 2. Fetch the corresponding Borrower ID from the database
+                            const snapshot = await database.ref(`Borrowers/${userCredential.user.uid}/borrowerId`).once('value');
+                            const loggedInBorrowerId = snapshot.val();
+                            
+                            if (loggedInBorrowerId) {
+                                onLoginSuccess(userCredential.user, loggedInBorrowerId); // Pass user and ID back to App
+                            } else {
+                                // This happens if the user exists in Auth but not in Realtime DB (corrupted)
+                                throw new Error("Borrower ID not found. Please contact admin.");
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Authentication failed:", err);
+                        setError(err.message);
+                    } finally {
+                        setIsProcessing(false);
+                    }
+                };
+
+                return (
+                    <div className="max-w-md mx-auto p-6 mt-10 bg-white shadow-2xl rounded-xl space-y-4"> 
+                        <h2 className="text-3xl font-bold text-teal-800 text-center">
+                            {isRegistering ? 'New Borrower Registration' : 'Borrower Login'}
+                        </h2>
+                        
+                        <form onSubmit={handleAuth} className="space-y-4">
+                            {isRegistering && (
+                                <input
+                                    type="text"
+                                    value={borrowerId}
+                                    onChange={(e) => setBorrowerId(e.target.value.toUpperCase().replace(/\s/g, ''))}
+                                    placeholder="Student/Faculty ID (e.g., S2022-001)"
+                                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                    required={isRegistering}
+                                    minLength={4}
+                                />
+                            )}
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                placeholder="Email Address"
+                                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                required
+                            />
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder="Password (min 6 characters)"
+                                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                required
+                                minLength={6}
+                            />
+                            
+                            {error && <p className="text-red-600 text-sm">{error}</p>}
+
+                            <button
+                                type="submit"
+                                className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition shadow-md"
+                                disabled={isProcessing}
+                            >
+                                {isProcessing ? 'Processing...' : isRegistering ? 'Register & Create Account' : 'Log In'}
+                            </button>
+                        </form>
+                        
+                        <button
+                            onClick={() => setIsRegistering(!isRegistering)}
+                            className="w-full text-sm text-gray-500 hover:text-teal-700"
+                            disabled={isProcessing}
+                        >
+                            {isRegistering ? 'Already have an account? Login here.' : 'Need to register? Create an account.'}
+                        </button>
+                    </div>
+                );
+            };
+
+
+            // Function K: QrGenerator (Renders a QR code image)
+
+            const QrGenerator = ({ data, size = 200, name = 'Code' }) => {
+                // 1. Encode the data for the URL
+                const encodedData = encodeURIComponent(data);
+                
+                // 2. Google Charts API URL structure
+                const qrCodeUrl = `https://chart.googleapis.com/chart?chs=${size}x${size}&cht=qr&chl=${encodedData}`;
+
+                // 3. Render the image and a download button
+                return (
+                    <div className="flex flex-col items-center p-4 bg-white rounded-xl shadow-inner border border-gray-200">
+                        <h4 className="text-lg font-bold text-gray-700 mb-2">QR Code for: {name}</h4>
+                        <img src={qrCodeUrl} alt={`${name} QR Code`} className="w-48 h-48 border border-gray-300 p-1 mb-3" />
+                        <a 
+                            href={qrCodeUrl} 
+                            download={`${name}_QR_Code.png`}
+                            className="w-full text-center bg-teal-600 text-white p-2 rounded-lg font-semibold hover:bg-teal-700 transition"
+                        >
+                            Download QR Code
+                        </a>
+                        <p className="text-xs mt-2 text-gray-500">
+                            Data: <span className="font-mono text-teal-800 break-all">{data}</span>
+                        </p>
+                    </div>
+                );
+            };
+
+
         // Function G-2 : AdminPortal (Updated for Thematic Separation)
 
         // --- ADMIN PORTAL COMPONENT (Handles Login Gate) ---
@@ -852,12 +994,36 @@
 
 
 
-        // Function H: The Main App Component (Final Fixed Structure)
+        // Function H: The Main App Component (Final Fixed Structure + AUTH)
         const App = () => {
             const [keys, setKeys] = useState({});
             const [loading, setLoading] = useState(true);
+            // 🛑 NEW: 'public', 'admin', 'user' (logged-in borrower)
             const [viewMode, setViewMode] = useState('public'); 
             const [currentTime, setCurrentTime] = useState(new Date());
+            
+            // 🛑 NEW AUTH STATES
+            const [loggedInUser, setLoggedInUser] = useState(null); // Firebase User Object
+            const [loggedInBorrowerId, setLoggedInBorrowerId] = useState(null); // Student/Faculty ID
+            const [selectedKeyForQr, setSelectedKeyForQr] = useState(''); // State for Admin QR Generator
+            
+            // 🛑 NEW LOGIN HANDLER
+            const handleUserLogin = (user, borrowerId) => {
+                setLoggedInUser(user);
+                setLoggedInBorrowerId(borrowerId);
+                setViewMode('user'); // Switch to the user portal view
+                alert(`Welcome, ID ${borrowerId}. You are now logged in.`);
+            };
+            
+            // 🛑 NEW LOGOUT HANDLER
+            const handleUserLogout = () => {
+                auth.signOut();
+                setLoggedInUser(null);
+                setLoggedInBorrowerId(null);
+                setViewMode('public');
+                alert('You have been logged out.');
+            };
+            
 
             // Effect 1: Clock (Drives Countdown and Public Time)
             useEffect(() => {
@@ -885,7 +1051,6 @@
 
                 return () => keysRef.off();
             }, []); 
-            
             
             // CRITICAL FIX: Add defensive check to sorting to prevent "a.name is undefined" error
                 const keyArray = Object.keys(keys)
@@ -937,6 +1102,13 @@
                                 >
                                     Public Status
                                 </button>
+                                {/* 🛑 NEW: Borrower Portal Button */}
+                                <button 
+                                    onClick={() => setViewMode('user')}
+                                    className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'user' ? 'bg-green-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                                >
+                                    Borrower Portal
+                                </button>
                                 <button 
                                     onClick={() => setViewMode('admin')}
                                     className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'admin' ? 'bg-teal-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
@@ -966,8 +1138,73 @@
                                 </div>
                             )}
                             
+                            {/* 🛑 NEW: USER AUTH/PORTAL LOGIC */}
+                            {viewMode === 'user' && (
+                                loggedInUser ? (
+                                    <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
+                                        <div className="flex justify-between items-center border-b pb-3">
+                                            <h2 className="text-3xl font-bold text-green-700">My Borrower Portal</h2>
+                                            <button onClick={handleUserLogout} className="bg-red-500 text-white p-2 rounded-lg text-sm font-semibold hover:bg-red-600">
+                                                Log Out
+                                            </button>
+                                        </div>
+                                        <p className="text-xl text-gray-700">
+                                            Logged in as: <span className="font-extrabold text-green-800">{loggedInBorrowerId}</span>
+                                        </p>
+                                        
+                                        <h3 className="text-2xl font-bold text-gray-800 border-b pb-2">My Identity QR Code</h3>
+                                        {/* The QR Code Generator for the user's ID */}
+                                        <QrGenerator data={loggedInBorrowerId} name={`ID_${loggedInBorrowerId}`} />
+
+                                        <div className="p-4 bg-green-50 rounded-xl text-sm text-green-800">
+                                            <p className="font-semibold">Instruction:</p>
+                                            <p>Please use this QR code when checking out keys at the counter. The admin can simply scan this code to input your Borrower ID instantly.</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    // Show the login/registration form if not logged in
+                                    <UserAuth onLoginSuccess={handleUserLogin} />
+                                )
+                            )}
+
                             {viewMode === 'admin' && (
-                                <AdminPortal keys={keys} />
+                                <>
+                                    <AdminPortal keys={keys} />
+
+                                    {/* 🛑 NEW: ADMIN KEY QR GENERATOR SECTION */}
+                                    <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
+                                        <h3 className="text-3xl font-bold text-teal-800 border-b pb-3">Key QR Code Generator</h3>
+                                        <p className="text-sm text-gray-600">Select a key to generate its unique QR code for printing and binding to the physical key.</p>
+                                        
+                                        <label className="block space-y-2">
+                                            <span className="text-lg text-gray-700 font-bold">Select Key ID:</span>
+                                            <select 
+                                                value={selectedKeyForQr}
+                                                onChange={(e) => setSelectedKeyForQr(e.target.value)}
+                                                className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white"
+                                            >
+                                                <option value="">-- Select Key to Generate QR --</option>
+                                                {keyArray.map(key => (
+                                                    <option key={key.id} value={key.id}>
+                                                        {key.name} - ({key.id})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        
+                                        {selectedKeyForQr && (
+                                            <QrGenerator 
+                                                data={selectedKeyForQr} 
+                                                name={`${keys[selectedKeyForQr].name}_KEY`} 
+                                            />
+                                        )}
+
+                                        <div className="p-4 bg-teal-50 rounded-xl text-sm text-teal-800">
+                                            <p className="font-semibold">Key Binding Note:</p>
+                                            <p>The QR code data is the **Key ID** (e.g., `LAB_3_KEY`). If the physical QR code is lost or damaged, you can simply print a new one using the original Key ID from this list. The key's binding remains secure in the database.</p>
+                                        </div>
+                                    </div>
+                                </>
                             )}
 
                             <footer className="text-center text-xs text-gray-400 pt-8 pb-4">
@@ -976,8 +1213,7 @@
                         </div>
                     </div>
                 );
-        };
-
+};
         // --- START THE APP ---
         
         // --- 3. THE RENDER CALL WILL BE AT THE VERY BOTTOM (React 18 Update) ---
