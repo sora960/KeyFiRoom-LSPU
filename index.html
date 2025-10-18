@@ -248,20 +248,58 @@
                 setEditMode(false);
             }, [selectedKeyId, keyData]);
 
-            // --- QR SCAN HANDLING LOGIC (UNCHANGED, but REMAINS CRITICAL) ---
+            // --- QR SCAN HANDLING LOGIC (UPDATED FOR JSON TRANSACTION AND RETURN) ---
             const handleScan = (scannedText) => { 
-                // Simple check: If text looks numeric, treat it as a Borrower ID
-                const isBorrowerId = !isNaN(scannedText) && scannedText.length >= 4; 
                 
+                // --- 1. Attempt to Parse as JSON (Transaction QR) ---
+                try {
+                    const transaction = JSON.parse(scannedText);
+                    
+                    if (transaction.action === "CHECKOUT" && transaction.keyId && transaction.borrowerId && transaction.duration) {
+                        
+                        // 1a. Checkout Transaction QR Scanned
+                        setSelectedKeyId(transaction.keyId); 
+                        setBorrowerId(transaction.borrowerId);
+                        setDuration(transaction.duration);
+                        
+                        // Alert provides confirmation and directs admin to the next step
+                        alert(`CHECKOUT REQUEST LOADED: Key ${keys[transaction.keyId]?.name || transaction.keyId} for ID ${transaction.borrowerId} for ${transaction.duration} hours. Please CONFIRM.`);
+                        return;
+                    }
+                    
+                    if (transaction.action === "RETURN" && transaction.keyId) {
+                        
+                        // 1b. Return Transaction QR Scanned (This simplifies returns, which is great)
+                        setSelectedKeyId(transaction.keyId); 
+                        
+                        // The return logic is now triggered by loading the key, and the admin clicks 'RETURN'
+                        alert(`RETURN REQUEST LOADED: Key ${keys[transaction.keyId]?.name || transaction.keyId}. Please CONFIRM RETURN.`);
+                        return;
+                    }
+
+                } catch (e) {
+                    // console.log("Scanned text is not a JSON transaction:", e);
+                    // Continue to fallback checks if parsing fails
+                }
+                
+                // --- 2. Fallback: Simple Key ID Scan (Permanent Key QR) ---
+                if (keys[scannedText]) { 
+                    setSelectedKeyId(scannedText); 
+                    alert(`Key ID Scanned: ${keys[scannedText].name} selected for action.`);
+                    return;
+                }
+                
+                // --- 3. Fallback: Simple Borrower ID Scan (Manual/Old ID QR) ---
+                // Simple check: If text looks numeric, treat it as a Borrower ID for manual input
+                const isBorrowerId = !isNaN(scannedText) && scannedText.length >= 4; 
                 if (isBorrowerId) {
                     setBorrowerId(scannedText); 
-                    alert(`Borrower ID Scanned: ${scannedText}. Ready for checkout.`);
-                } else if (keys[scannedText]) { // If text matches a known Key ID (e.g., LAB_3_KEY)
-                    setSelectedKeyId(scannedText); 
-                    alert(`Key ID Scanned: ${keys[scannedText].name} selected.`);
-                } else {
-                    alert(`Scan failed: Scanned text "${scannedText}" does not match a recognized Key or Borrower ID.`);
+                    alert(`Borrower ID Scanned: ${scannedText}. Please select Key and Duration.`);
+                    return;
                 }
+                
+                // --- 4. Final Failover ---
+                alert(`Scan failed: Scanned text "${scannedText}" does not match any known transaction, key, or borrower ID.`);
             };
             
             // --- CHECKOUT LOGIC (UNCHANGED) ---
@@ -784,6 +822,123 @@
         };
 
 
+        // Function J-0: BorrowerPortalContents (Handles Key Selection and Transaction QR Generation)
+
+        const BorrowerPortalContents = ({ keys, keyArray, loggedInBorrowerId, handleUserLogout }) => {
+            const availableKeys = keyArray.filter(key => key.status === 'AVAILABLE');
+            const [selectedKeyId, setSelectedKeyId] = useState('');
+            const [duration, setDuration] = useState(2);
+            const [transactionQrData, setTransactionQrData] = useState(null);
+
+            const handleGenerateQr = () => {
+                if (!selectedKeyId || !duration) {
+                    alert("Please select both a key and a duration.");
+                    return;
+                }
+
+                // 🛑 CRITICAL STEP: Construct the JSON payload for the Transaction QR
+                const transactionPayload = {
+                    action: "CHECKOUT",
+                    keyId: selectedKeyId,
+                    borrowerId: loggedInBorrowerId,
+                    duration: duration,
+                    timestamp: new Date().toISOString(),
+                };
+
+                // Convert the JSON object to a string for the QR code
+                setTransactionQrData(JSON.stringify(transactionPayload));
+            };
+            
+            // Clear QR data if selections change
+            useEffect(() => {
+                setTransactionQrData(null);
+            }, [selectedKeyId, duration]);
+
+
+            return (
+                <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
+                    <div className="flex justify-between items-center border-b pb-3">
+                        <h2 className="text-3xl font-bold text-green-700">My Borrower Portal</h2>
+                        <button onClick={handleUserLogout} className="bg-red-500 text-white p-2 rounded-lg text-sm font-semibold hover:bg-red-600">
+                            Log Out
+                        </button>
+                    </div>
+                    <p className="text-xl text-gray-700">
+                        Logged in as: <span className="font-extrabold text-green-800">{loggedInBorrowerId}</span>
+                    </p>
+                    
+                    <h3 className="text-2xl font-bold text-gray-800 border-b pb-2">1. Key Request Configuration</h3>
+
+                    {availableKeys.length === 0 ? (
+                        <p className="text-center text-red-500 font-semibold py-4">
+                            ⚠️ No keys are currently available for checkout. Please check the Public Status.
+                        </p>
+                    ) : (
+                        <div className="space-y-4">
+                            {/* Key Selection */}
+                            <label className="block space-y-2">
+                                <span className="text-lg text-gray-700 font-bold">Select Available Key:</span>
+                                <select 
+                                    value={selectedKeyId}
+                                    onChange={(e) => setSelectedKeyId(e.target.value)}
+                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white focus:ring-green-500 focus:border-green-500"
+                                >
+                                    <option value="">-- Select Key to Borrow --</option>
+                                    {availableKeys.map(key => (
+                                        <option key={key.id} value={key.id}>
+                                            {key.name} - ({key.location})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            {/* Duration Selection */}
+                            <label className="block space-y-2">
+                                <span className="text-lg text-gray-700 font-bold">Duration (Hours):</span>
+                                <select 
+                                    value={duration} 
+                                    onChange={(e) => setDuration(parseInt(e.target.value))}
+                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white focus:ring-green-500 focus:border-green-500"
+                                >
+                                    <option value={1}>1 Hour</option>
+                                    <option value={2}>2 Hours</option>
+                                    <option value={4}>4 Hours</option>
+                                    <option value={8}>8 Hours (Full Day)</option>
+                                </select>
+                            </label>
+
+                            <button
+                                onClick={handleGenerateQr}
+                                disabled={!selectedKeyId || !duration}
+                                className="w-full bg-green-600 text-white p-3 rounded-xl font-semibold hover:bg-green-700 transition shadow-md disabled:bg-gray-400"
+                            >
+                                Generate Transaction QR Code
+                            </button>
+                        </div>
+                    )}
+                    
+                    {transactionQrData && (
+                        <>
+                            <h3 className="text-2xl font-bold text-gray-800 border-b pb-2 pt-4">2. Transaction QR Code</h3>
+                            
+                            {/* The QR Code Generator for the Transaction Payload */}
+                            <QrGenerator 
+                                data={transactionQrData} 
+                                name={`TXN_${loggedInBorrowerId}`} 
+                                size={250}
+                            />
+
+                            <div className="p-4 bg-green-50 rounded-xl text-sm text-green-800 border border-green-300">
+                                <p className="font-semibold">Instruction:</p>
+                                <p>Show this single QR code to the key keeper. They will scan it to instantly process your **Checkout Request**.</p>
+                            </div>
+                        </>
+                    )}
+                </div>
+            );
+        };
+
+
         // Function J: UserAuth (Handles Registration and Login)
 
             const UserAuth = ({ onLoginSuccess }) => {
@@ -1250,47 +1405,34 @@
                                 </div>
                             )}
                             
-                            {/* 🛑 USER AUTH/PORTAL LOGIC */}
-                            {viewMode === 'user' && (
-                                loggedInUser ? (
-                                    <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
-                                        <div className="flex justify-between items-center border-b pb-3">
-                                            <h2 className="text-3xl font-bold text-green-700">My Borrower Portal</h2>
-                                            <button onClick={handleUserLogout} className="bg-red-500 text-white p-2 rounded-lg text-sm font-semibold hover:bg-red-600">
-                                                Log Out
-                                            </button>
-                                        </div>
-                                        <p className="text-xl text-gray-700">
-                                            Logged in as: <span className="font-extrabold text-green-800">{loggedInBorrowerId}</span>
-                                        </p>
-                                        
-                                        <h3 className="text-2xl font-bold text-gray-800 border-b pb-2">My Identity QR Code</h3>
-                                        {/* The QR Code Generator for the user's ID */}
-                                        <QrGenerator data={loggedInBorrowerId} name={`ID_${loggedInBorrowerId}`} />
+                            {/* 🛑 USER AUTH/PORTAL LOGIC (UPDATED TO PASS KEYS) */}
+                                                        {viewMode === 'user' && (
+                                                            loggedInUser ? (
+                                                                // Pass keys and borrower ID to the new component
+                                                                <BorrowerPortalContents 
+                                                                    keys={keys} 
+                                                                    keyArray={keyArray}
+                                                                    loggedInBorrowerId={loggedInBorrowerId}
+                                                                    handleUserLogout={handleUserLogout}
+                                                                />
+                                                            ) : (
+                                                                // Show the login/registration form if not logged in
+                                                                <UserAuth onLoginSuccess={handleUserLogin} />
+                                                            )
+                                                        )}
 
-                                        <div className="p-4 bg-green-50 rounded-xl text-sm text-green-800">
-                                            <p className="font-semibold">Instruction:</p>
-                                            <p>Please use this QR code when checking out keys at the counter. The admin can simply scan this code to input your Borrower ID instantly.</p>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    // Show the login/registration form if not logged in
-                                    <UserAuth onLoginSuccess={handleUserLogin} />
-                                )
-                            )}
+                                                        {/* 🛑 ADMIN PORTAL LOGIC (NOW ONLY CONTAINS THE SINGLE ADMINPORTAL CALL) */}
+                                                        {viewMode === 'admin' && (
+                                                            <AdminPortal keys={keys} keyArray={keyArray} />
+                                                        )}
 
-                            {/* 🛑 ADMIN PORTAL LOGIC (NOW ONLY CONTAINS THE SINGLE ADMINPORTAL CALL) */}
-                            {viewMode === 'admin' && (
-                                <AdminPortal keys={keys} keyArray={keyArray} />
-                            )}
-
-                            <footer className="text-center text-xs text-gray-400 pt-8 pb-4">
-                                Developed by CCS Students. Data updates instantly.
-                            </footer>
-                        </div>
-                    </div>
-                );
-        };
+                                                        <footer className="text-center text-xs text-gray-400 pt-8 pb-4">
+                                                            Developed by CCS Students. Data updates instantly.
+                                                        </footer>
+                                                    </div>
+                                                </div>
+                                            );
+                                    };
 
 
         // --- START THE APP ---
