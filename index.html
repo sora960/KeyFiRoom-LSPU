@@ -13,6 +13,9 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- EXTERNAL-API : QR Code Generator -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
     <!-- 🛑 CRITICAL FIX: Reverting to Stable Firebase v8 CDNs -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
@@ -887,45 +890,113 @@
             };
 
 
-            // Function K: QrGenerator (Renders a QR code image)
+        // Function K-1: QrCodeCanvas (The isolated engine that handles the pure JS library)
 
-            const QrGenerator = ({ data, size = 200, name = 'Code' }) => {
-                // 1. Encode the data for the URL
-                const encodedData = encodeURIComponent(data);
+        const QrCodeCanvas = ({ data, size }) => {
+            const qrContainerRef = useRef(null);
+
+            // This useEffect handles the pure JavaScript drawing and cleanup.
+            useEffect(() => {
+                // 1. Check if the global QrCode constructor is available
+                if (typeof window.QRCode === 'undefined' || !qrContainerRef.current) {
+                    return;
+                }
                 
-                // 2. Google Charts API URL structure
-                // 🛑 ALTERNATE FIX: Protocol-relative URL
-                const qrCodeUrl = `//chart.googleapis.com/chart?chs=${size}x${size}&cht=qr&chl=${encodedData}`;
+                // 2. Clear the container before drawing a new code (CRITICAL FIX)
+                // This ensures the old drawing is removed before the new one is added,
+                // preventing the DOMException error.
+                qrContainerRef.current.innerHTML = ''; 
 
-                // 3. Render the image and a download button
-                return (
-                    <div className="flex flex-col items-center p-4 bg-white rounded-xl shadow-inner border border-gray-200">
-                        <h4 className="text-lg font-bold text-gray-700 mb-2">QR Code for: {name}</h4>
-                        <img src={qrCodeUrl} alt={`${name} QR Code`} className="w-48 h-48 border border-gray-300 p-1 mb-3" />
-                        <a 
-                            href={qrCodeUrl} 
-                            download={`${name}_QR_Code.png`}
-                            className="w-full text-center bg-teal-600 text-white p-2 rounded-lg font-semibold hover:bg-teal-700 transition"
-                        >
-                            Download QR Code
-                        </a>
-                        <p className="text-xs mt-2 text-gray-500">
-                            Data: <span className="font-mono text-teal-800 break-all">{data}</span>
-                        </p>
-                    </div>
-                );
+                // 3. Draw the QR code
+                new window.QRCode(qrContainerRef.current, {
+                    text: data || 'No Data',
+                    width: size,
+                    height: size,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: window.QRCode.CorrectLevel.H
+                });
+
+            }, [data, size]);
+
+            // Renders only the container div for the JavaScript library to use.
+            // We add a specific class for the download function to easily find the canvas.
+            return <div ref={qrContainerRef} className="qr-canvas-container" />;
+        }
+
+
+        // Function K: QrGenerator (The UI wrapper that controls the download logic)
+
+        const QrGenerator = ({ data, size = 200, name = 'Code' }) => {
+            
+            const [qrReady, setQrReady] = useState(false);
+            
+            // Check for library readiness and enable the download button
+            useEffect(() => {
+                // Set a slight delay to confirm drawing has finished before enabling download
+                const timer = setTimeout(() => {
+                    setQrReady(typeof window.QRCode !== 'undefined');
+                }, 300); 
+                return () => clearTimeout(timer);
+            }, [data]);
+            
+
+            // Helper function to handle the download (Grabs the canvas from the container)
+            const handleDownload = () => {
+                // Query the DOM for the canvas element created inside the QrCodeCanvas component
+                const canvas = document.querySelector('.qr-canvas-container canvas'); 
+                if (canvas) {
+                    const dataURL = canvas.toDataURL('image/png');
+                    const a = document.createElement('a');
+                    a.href = dataURL;
+                    a.download = `${name}_QR_Code.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }
             };
 
+
+            return (
+                <div className="flex flex-col items-center p-4 bg-white rounded-xl shadow-inner border border-gray-200">
+                    <h4 className="text-lg font-bold text-gray-700 mb-2">QR Code for: {name}</h4>
+                    
+                    <div className="p-1 mb-3 border border-gray-300 w-fit h-fit">
+                        {/* Use the isolated component here */}
+                        {qrReady ? (
+                            <QrCodeCanvas data={data} size={size} />
+                        ) : (
+                            <p className="text-red-500">QR Generator is loading...</p>
+                        )}
+                    </div>
+
+                    <button 
+                        onClick={handleDownload}
+                        className={`w-full text-center p-2 rounded-lg font-semibold transition shadow-md ${qrReady ? 'bg-teal-600 text-white hover:bg-teal-700' : 'bg-gray-400 text-gray-700 cursor-not-allowed'}`}
+                        disabled={!qrReady}
+                    >
+                        {qrReady ? 'Download QR Code' : 'Generating...'}
+                    </button>
+                    
+                    <p className="text-xs mt-2 text-gray-500">
+                        Data: <span className="font-mono text-teal-800 break-all">{data}</span>
+                    </p>
+                </div>
+            );
+        };
 
         // Function G-2 : AdminPortal (Updated for Thematic Separation)
 
         // --- ADMIN PORTAL COMPONENT (Handles Login Gate) ---
-        const AdminPortal = ({ keys }) => {
+        // 🛑 FIX: Ensure keyArray is accepted as a prop
+        const AdminPortal = ({ keys, keyArray }) => {
             // State to manage input and authentication status
             const [passcode, setPasscode] = useState('');
             const [isAuthenticated, setIsAuthenticated] = useState(false);
             const [isSigningIn, setIsSigningIn] = useState(false);
             const [selectedKeyId, setSelectedKeyId] = useState(() => Object.keys(keys).find(id => keys[id] && keys[id].name) || Object.keys(keys)[0] || '');
+            // NEW STATE: To select which key to generate a QR code for
+            const [selectedKeyForQr, setSelectedKeyForQr] = useState(''); 
 
             // Logic to attempt sign-in and password check
             const handleLogin = async (e) => {
@@ -948,7 +1019,7 @@
             };
 
             if (!isAuthenticated) {
-                // --- LOGIN SCREEN RENDER: Dark Theme for Security Gate ---
+                // --- LOGIN SCREEN RENDER: (UNCHANGED) ---
                 return (
                     // NEW: Darker background for the login box
                     <div className="max-w-xs mx-auto p-6 mt-10 bg-teal-800 shadow-2xl rounded-xl"> 
@@ -976,23 +1047,57 @@
                 );
             }
 
-            // If authenticated, render the Key Management Panel
+            // If authenticated, render the full Admin Portal
             return (
                 <div className="space-y-6">
 
-                    {/* NEW: Key Creation Component */}
+                    {/* Key Creation Component */}
                     <KeyCreator /> 
 
                     {/* Checkout/Return Forms */}
                     <KeyManagementPanel keys={keys} selectedKeyId={selectedKeyId} setSelectedKeyId={setSelectedKeyId} />
                     
-                    {/* NEW: Transaction History Viewer */}
+                    {/* Transaction History Viewer */}
                     <TransactionHistory />
-                    
+
+                    {/* 🛑 NEWLY MOVED: ADMIN KEY QR GENERATOR SECTION */}
+                    {keyArray.length > 0 && (
+                        <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
+                            <h3 className="text-3xl font-bold text-teal-800 border-b pb-3">Key QR Code Generator</h3>
+                            <p className="text-sm text-gray-600">Select a key to generate its unique QR code for printing and binding to the physical key.</p>
+                            
+                            <label className="block space-y-2">
+                                <span className="text-lg text-gray-700 font-bold">Select Key ID:</span>
+                                <select 
+                                    value={selectedKeyForQr}
+                                    onChange={(e) => setSelectedKeyForQr(e.target.value)}
+                                    className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white"
+                                >
+                                    <option value="">-- Select Key to Generate QR --</option>
+                                    {keyArray.map(key => (
+                                        <option key={key.id} value={key.id}>
+                                            {key.name} - ({key.id})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            
+                            {selectedKeyForQr && (
+                                <QrGenerator 
+                                    data={selectedKeyForQr} 
+                                    name={`${keys[selectedKeyForQr].name}_KEY`} 
+                                />
+                            )}
+
+                            <div className="p-4 bg-teal-50 rounded-xl text-sm text-teal-800">
+                                <p className="font-semibold">Key Binding Note:</p>
+                                <p>The QR code data is the **Key ID** (e.g., `LAB_3_KEY`). If the physical QR code is lost or damaged, you can simply print a new one using the original Key ID from this list. The key's binding remains secure in the database.</p>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
-
 
 
         // Function H: The Main App Component (Final Fixed Structure + AUTH)
@@ -1103,7 +1208,7 @@
                                 >
                                     Public Status
                                 </button>
-                                {/* 🛑 NEW: Borrower Portal Button */}
+                                {/* 🛑 Borrower Portal Button */}
                                 <button 
                                     onClick={() => setViewMode('user')}
                                     className={`flex-1 p-3 rounded-xl text-sm sm:text-base font-bold transition focus:outline-none ${viewMode === 'user' ? 'bg-green-700 text-white shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
@@ -1139,7 +1244,7 @@
                                 </div>
                             )}
                             
-                            {/* 🛑 NEW: USER AUTH/PORTAL LOGIC */}
+                            {/* 🛑 USER AUTH/PORTAL LOGIC */}
                             {viewMode === 'user' && (
                                 loggedInUser ? (
                                     <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
@@ -1168,44 +1273,9 @@
                                 )
                             )}
 
+                            {/* 🛑 ADMIN PORTAL LOGIC (NOW ONLY CONTAINS THE SINGLE ADMINPORTAL CALL) */}
                             {viewMode === 'admin' && (
-                                <>
-                                    <AdminPortal keys={keys} />
-
-                                    {/* 🛑 NEW: ADMIN KEY QR GENERATOR SECTION */}
-                                    <div className="p-6 bg-white shadow-2xl rounded-2xl space-y-6">
-                                        <h3 className="text-3xl font-bold text-teal-800 border-b pb-3">Key QR Code Generator</h3>
-                                        <p className="text-sm text-gray-600">Select a key to generate its unique QR code for printing and binding to the physical key.</p>
-                                        
-                                        <label className="block space-y-2">
-                                            <span className="text-lg text-gray-700 font-bold">Select Key ID:</span>
-                                            <select 
-                                                value={selectedKeyForQr}
-                                                onChange={(e) => setSelectedKeyForQr(e.target.value)}
-                                                className="w-full p-4 border-2 border-gray-300 rounded-xl text-lg bg-white"
-                                            >
-                                                <option value="">-- Select Key to Generate QR --</option>
-                                                {keyArray.map(key => (
-                                                    <option key={key.id} value={key.id}>
-                                                        {key.name} - ({key.id})
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </label>
-                                        
-                                        {selectedKeyForQr && (
-                                            <QrGenerator 
-                                                data={selectedKeyForQr} 
-                                                name={`${keys[selectedKeyForQr].name}_KEY`} 
-                                            />
-                                        )}
-
-                                        <div className="p-4 bg-teal-50 rounded-xl text-sm text-teal-800">
-                                            <p className="font-semibold">Key Binding Note:</p>
-                                            <p>The QR code data is the **Key ID** (e.g., `LAB_3_KEY`). If the physical QR code is lost or damaged, you can simply print a new one using the original Key ID from this list. The key's binding remains secure in the database.</p>
-                                        </div>
-                                    </div>
-                                </>
+                                <AdminPortal keys={keys} keyArray={keyArray} />
                             )}
 
                             <footer className="text-center text-xs text-gray-400 pt-8 pb-4">
@@ -1214,7 +1284,9 @@
                         </div>
                     </div>
                 );
-};
+        };
+
+        
         // --- START THE APP ---
         
         // --- 3. THE RENDER CALL WILL BE AT THE VERY BOTTOM (React 18 Update) ---
